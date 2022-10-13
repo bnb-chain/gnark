@@ -8,6 +8,7 @@ import (
 
 func init() {
 	Register(IsZero)
+	Register(Self)
 }
 
 // IsZero computes the value 1 - a^(modulus-1) for the single input a. This
@@ -31,5 +32,10 @@ func IsZero(curveID ecc.ID, inputs []*big.Int, results []*big.Int) error {
 	inputs[0].SetUint64(1)
 	result.Sub(inputs[0], result).Mod(result, q)
 
+	return nil
+}
+
+func Self(curveID ecc.ID, inputs []*big.Int, results []*big.Int) error {
+	results[0].Set(inputs[0])
 	return nil
 }

@@ -172,3 +172,165 @@ func (p *Point) doubleBaseScalarMul(api frontend.API, p1, p2 *Point, s1, s2 fron
 
 	return p
 }
+
+// doubleBaseScalarMulCached computes s1*P1+s2*P2
+// where P1 and P2 are points on a twisted Edwards curve
+// and s1, s2 scalars.
+func (p *Point) doubleBaseScalarMulCached(api frontend.API, p1, p2 *Point, s1, s2 frontend.Variable, curve *CurveParams) *Point {
+
+	// first unpack the scalars
+	b1 := api.ToBinary(s1)
+	b2 := api.ToBinary(s2)
+	n := len(b1)
+
+	base1Arrays := make([]*Point, 8)
+	base2Arrays := make([]*Point, 8)
+	sumBase1Arrays := make([]*Point, 8)
+	sumBase2Arrays := make([]*Point, 8)
+
+	base1Arrays[0] = p1
+	base2Arrays[0] = p2
+	for i := 1; i < len(base1Arrays); i++ {
+		base1Arrays[i] = new(Point).double(api, base1Arrays[i-1], curve)
+		base2Arrays[i] = new(Point).double(api, base1Arrays[i-1], curve)
+	}
+
+	for i := 0; i < len(base1Arrays)-1; i += 2 {
+		sum := Point{}
+		sum.add(api, base1Arrays[i], base1Arrays[i+1], curve)
+		sumBase1Arrays[i] = &sum
+		sumBase1Arrays[i+1] = &sum
+	}
+
+	for i := 0; i < len(base1Arrays)-1; i += 2 {
+		sum := Point{}
+		sum.add(api, base2Arrays[i], base2Arrays[i+1], curve)
+		sumBase2Arrays[i] = &sum
+		sumBase2Arrays[i+1] = &sum
+	}
+
+	// 00000001 - ....
+	// 1 - 2 - 4 - 8 - 16 - 32 - 64 - 128
+	// 3 - 12 - 48 - 192
+
+	//  8 doubles + 16 lookup-2s + 8 adds
+
+	//  8 doubles ( every 8, should / 32 ) 0.25 doubles
+	//  4 adds (every 8, should / 32) 0.125 adds
+	//  16 lookup-2s + 8 adds + 8 doubles ( every batch, should / batch size )
+
+	res := Point{0, 1}
+
+	for i := n / 8; i >= 0; i-- {
+
+		for j := 0; j < 7; j += 2 {
+			if i*8+j+1 >= 254 {
+				continue
+			}
+			b11 := b1[i*8+j]
+			b12 := b1[i*8+j+1]
+
+			tmp1 := Point{}
+			tmp1.X = api.Lookup2(b11, b12, 0, base1Arrays[j].X, base1Arrays[j+1].X, sumBase1Arrays[j].X)
+			tmp1.Y = api.Lookup2(b11, b12, 1, base1Arrays[j].Y, base1Arrays[j+1].Y, sumBase1Arrays[j].Y)
+			res.add(api, &res, &tmp1, curve)
+
+			b21 := b2[i*8+j]
+			b22 := b2[i*8+j+1]
+
+			tmp2 := Point{}
+			tmp2.X = api.Lookup2(b21, b22, 0, base2Arrays[j].X, base2Arrays[j+1].X, sumBase2Arrays[j].X)
+			tmp2.Y = api.Lookup2(b21, b22, 1, base2Arrays[j].Y, base2Arrays[j+1].Y, sumBase2Arrays[j].Y)
+
+			res.add(api, &res, &tmp2, curve)
+		}
+
+		for k := 0; k < 8 && i != 0; k++ {
+			res.double(api, &res, curve)
+		}
+	}
+
+	p.X = res.X
+	p.Y = res.Y
+	return p
+}
+
+func prepareBinaryAndSumCache(api frontend.API, p *Point, s frontend.Variable, curve *CurveParams) (int, []frontend.Variable, []*Point, []*Point) {
+	// first unpack the scalars
+	b1 := api.ToBinary(s)
+	n := len(b1)
+
+	base1Arrays := make([]*Point, 8)
+	sumBase1Arrays := make([]*Point, 8)
+
+	base1Arrays[0] = p
+
+	for i := 1; i < len(base1Arrays); i++ {
+		base1Arrays[i] = new(Point).double(api, base1Arrays[i-1], curve)
+	}
+
+	for i := 0; i < len(base1Arrays)-1; i += 2 {
+		sum := Point{}
+		sum.add(api, base1Arrays[i], base1Arrays[i+1], curve)
+		sumBase1Arrays[i] = &sum
+		sumBase1Arrays[i+1] = &sum
+	}
+
+	return n, b1, base1Arrays, sumBase1Arrays
+}
+
+// multiBaseScalarMulCached computes s1*P1+s2*P2+s3*P3...+sn*Pn
+func (p *Point) multiBaseScalarMulCached(api frontend.API, ps []*Point, ss []frontend.Variable, curve *CurveParams) *Point {
+
+	// first unpack the scalars
+	var n = 0
+	binaryCaches := make([][]frontend.Variable, len(ps))
+	sumCaches := make([][]*Point, len(ps))
+	baseCaches := make([][]*Point, len(ps))
+	for i := range ps {
+		q, binaryCache, baseCache, sumCache := prepareBinaryAndSumCache(api, ps[i], ss[i], curve)
+		binaryCaches[i] = binaryCache
+		sumCaches[i] = sumCache
+		baseCaches[i] = baseCache
+		n = q
+	}
+
+	// 00000001 - ....
+	// 1 - 2 - 4 - 8 - 16 - 32 - 64 - 128
+	// 3 - 12 - 48 - 192
+
+	//  8 doubles + 16 lookup-2s + 8 adds
+
+	//  8 doubles ( every 8, should / 32 ) 0.25 doubles
+	//  4 adds (every 8, should / 32) 0.125 adds
+	//  16 lookup-2s + 8 adds + 8 doubles ( every batch, should / batch size )
+
+	res := Point{0, 1}
+
+	for i := n / 8; i >= 0; i-- {
+
+		for j := 0; j < 7; j += 2 {
+			if i*8+j+1 >= 254 {
+				continue
+			}
+
+			for k := range binaryCaches {
+				b11 := binaryCaches[k][i*8+j]
+				b12 := binaryCaches[k][i*8+j+1]
+
+				tmp1 := Point{}
+				tmp1.X = api.Lookup2(b11, b12, 0, baseCaches[k][j].X, baseCaches[k][j+1].X, sumCaches[k][j].X)
+				tmp1.Y = api.Lookup2(b11, b12, 1, baseCaches[k][j].Y, baseCaches[k][j+1].Y, sumCaches[k][j].Y)
+				res.add(api, &res, &tmp1, curve)
+			}
+		}
+
+		for k := 0; k < 8 && i != 0; k++ {
+			res.double(api, &res, curve)
+		}
+	}
+
+	p.X = res.X
+	p.Y = res.Y
+	return p
+}

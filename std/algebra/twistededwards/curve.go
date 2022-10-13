@@ -61,3 +61,15 @@ func (c *curve) DoubleBaseScalarMul(p1, p2 Point, s1, s2 frontend.Variable) Poin
 	p.doubleBaseScalarMul(c.api, &p1, &p2, s1, s2, c.params)
 	return p
 }
+
+func (c *curve) DoubleBaseScalarMulCached(p1, p2 Point, s1, s2 frontend.Variable) Point {
+	var p Point
+	p.doubleBaseScalarMulCached(c.api, &p1, &p2, s1, s2, c.params)
+	return p
+}
+
+func (c *curve) MultiBaseScalarMulCached(p1 []*Point, s1 []frontend.Variable) Point {
+	var p Point
+	p.multiBaseScalarMulCached(c.api, p1, s1, c.params)
+	return p
+}

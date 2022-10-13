@@ -19,13 +19,11 @@ package eddsa
 
 import (
 	"errors"
-
 	"github.com/consensys/gnark-crypto/ecc"
-	"github.com/consensys/gnark/logger"
-	"github.com/consensys/gnark/std/hash"
-
 	"github.com/consensys/gnark/frontend"
+	"github.com/consensys/gnark/logger"
 	"github.com/consensys/gnark/std/algebra/twistededwards"
+	"github.com/consensys/gnark/std/hash"
 
 	edwardsbls12377 "github.com/consensys/gnark-crypto/ecc/bls12-377/twistededwards"
 	edwardsbls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381/twistededwards"
@@ -51,30 +49,113 @@ type Signature struct {
 	S frontend.Variable
 }
 
+type BatchStores struct {
+	Sigs    []Signature
+	Msgs    []frontend.Variable
+	Pubkeys []PublicKey
+	Flags   []frontend.Variable
+}
+
+var batchSize = 32
+
+// CreateBatchStores will create a batch stores signature needs to be verified
+func CreateBatchStores() *BatchStores {
+	return &BatchStores{Sigs: make([]Signature, 0), Msgs: make([]frontend.Variable, 0), Pubkeys: make([]PublicKey, 0)}
+}
+
 // Verify verifies an eddsa signature using MiMC hash function
 // cf https://en.wikipedia.org/wiki/EdDSA
-func Verify(curve twistededwards.Curve, sig Signature, msg frontend.Variable, pubKey PublicKey, hash hash.Hash) error {
+func Verify(batch *BatchStores, curve twistededwards.Curve, sig Signature, msg frontend.Variable, pubKey PublicKey, flag frontend.Variable, hash hash.Hash) error {
+	batch.Pubkeys = append(batch.Pubkeys, pubKey)
+	batch.Msgs = append(batch.Msgs, msg)
+	batch.Sigs = append(batch.Sigs, sig)
+	batch.Flags = append(batch.Flags, flag)
+	return nil
+}
 
-	// compute H(R, A, M)
-	hash.Write(sig.R.X)
-	hash.Write(sig.R.Y)
-	hash.Write(pubKey.A.X)
-	hash.Write(pubKey.A.Y)
-	hash.Write(msg)
-	hRAM := hash.Sum()
+// Flush splits the Verify results into batches and then call batchVerfiy to the batches
+// cf https://en.wikipedia.org/wiki/EdDSA
+func Flush(batch *BatchStores, curve twistededwards.Curve, hash hash.Hash) error {
+	i := 0
+	for ; i+batchSize <= len(batch.Msgs); i += batchSize {
+		err := BatchVerify(curve, batch.Sigs[i:i+batchSize], batch.Msgs[i:i+batchSize], batch.Pubkeys[i:i+batchSize], batch.Flags[i:i+batchSize], hash)
+		if err != nil {
+			return err
+		}
+	}
+
+	if i+batchSize > len(batch.Msgs) {
+		err := BatchVerify(curve, batch.Sigs[i:], batch.Msgs[i:], batch.Pubkeys[i:], batch.Flags[i:], hash)
+		if err != nil {
+			return err
+		}
+	}
+
+	batch.Pubkeys = batch.Pubkeys[:0]
+	batch.Msgs = batch.Msgs[:0]
+	batch.Sigs = batch.Sigs[:0]
+
+	return nil
+}
+
+// BatchVerify verifies an eddsa signature using MiMC hash function
+// cf https://en.wikipedia.org/wiki/EdDSA
+func BatchVerify(curve twistededwards.Curve, sig []Signature, msg []frontend.Variable, pubKey []PublicKey, flag []frontend.Variable, hash hash.Hash) error {
+
+	hRAMs := make([]frontend.Variable, len(sig))
+	for i := range hRAMs {
+		hash.Reset()
+		// compute H(R, A, M)
+		hash.Write(sig[i].R.X)
+		hash.Write(sig[i].R.Y)
+		hash.Write(pubKey[i].A.X)
+		hash.Write(pubKey[i].A.Y)
+		hash.Write(msg[i])
+		hRAMs[i] = hash.Sum()
+	}
+
+	var hRAMSum frontend.Variable = 0
+	for i := range hRAMs {
+		hRAMSum = curve.API().Add(hRAMSum, hRAMs[i])
+	}
+
+	var tRAM frontend.Variable = hRAMSum
+	tRAMExp := make([]frontend.Variable, len(sig))
+	tRAMExp[0] = 1
+	for i := range tRAMExp {
+		if i == 0 {
+			continue
+		}
+		tRAMExp[i] = curve.API().Mul(tRAMExp[i-1], tRAM)
+		tRAMExp[i] = curve.API().Select(flag[i], tRAMExp[i], 0) // for those flag is set to false, we do not add them into verification
+	}
 
 	base := twistededwards.Point{
 		X: curve.Params().Base[0],
 		Y: curve.Params().Base[1],
 	}
 
-	//[S]G-[H(R,A,M)]*A
-	_A := curve.Neg(pubKey.A)
-	Q := curve.DoubleBaseScalarMul(base, _A, sig.S, hRAM)
-	curve.AssertIsOnCurve(Q)
+	_R_APointsSum := twistededwards.Point{X: 0, Y: 1}
+	points := make([]*twistededwards.Point, 0)
+	coeffs := make([]frontend.Variable, 0)
+	for i := range tRAMExp {
+		ACoeff := curve.API().MulModP(tRAMExp[i], hRAMs[i], curve.Params().Order)
+		points = append(points, &pubKey[i].A, &sig[i].R)
+		coeffs = append(coeffs, ACoeff, tRAMExp[i])
+	}
+	_R_APointsSum = curve.MultiBaseScalarMulCached(points, coeffs)
+	_R_APointsSum = curve.Neg(_R_APointsSum)
 
-	//[S]G-[H(R,A,M)]*A-R
-	Q = curve.Add(curve.Neg(Q), sig.R)
+	var GCoeffSum frontend.Variable = 0
+	var GCoeffArr = make([]frontend.Variable, 0)
+	for i := range tRAMExp {
+		GCoeffArr = append(GCoeffArr, tRAMExp[i], sig[i].S)
+	}
+
+	GCoeffSum = curve.API().MultiBigMulAndAddGetMod(curve.Params().Order, GCoeffArr...)
+	GPointSum := curve.ScalarMul(base, GCoeffSum)
+	Q := curve.Add(GPointSum, _R_APointsSum)
+	curve.AssertIsOnCurve(Q)
 
 	// [cofactor]*(lhs-rhs)
 	log := logger.Logger()

@@ -18,6 +18,7 @@ package r1cs
 
 import (
 	"fmt"
+	"github.com/consensys/gnark/std/math/mod"
 	"math/big"
 	"path/filepath"
 	"reflect"
@@ -85,6 +86,41 @@ func (system *r1cs) Sub(i1, i2 frontend.Variable, in ...frontend.Variable) front
 	res = system.reduce(res)
 
 	return res
+}
+
+func (system *r1cs) MulModP(i1, i2, i3 frontend.Variable) frontend.Variable {
+	res, _ := system.Compiler().NewHint(mod.BigMulModP, 2, i1, i2, i3)
+	//system.AssertIsEqual(res[0], system.Div(system.Mul(i1, i2), i3))
+	system.AssertIsEqual(system.Add(res[1], system.Mul(res[0], i3)), system.Mul(i1, i2))
+	system.AssertIsLessOrEqual(res[1], i3)
+	system.AssertIsDifferent(res[1], i3)
+	return res[1]
+}
+
+func (system *r1cs) AddModP(i1, i2, i3 frontend.Variable) frontend.Variable {
+	res, _ := system.Compiler().NewHint(mod.BigAddModP, 2, i1, i2, i3)
+	//system.AssertIsEqual(res[0], system.Div(system.Add(i1, i2), i3))
+	system.AssertIsEqual(system.Add(res[1], system.Mul(res[0], i3)), system.Add(i1, i2))
+	system.AssertIsLessOrEqual(res[1], i3)
+	system.AssertIsDifferent(res[1], i3)
+	return res[1]
+}
+
+func (system *r1cs) MultiBigMulAndAddGetMod(i1 frontend.Variable, in ...frontend.Variable) frontend.Variable {
+	hintInputs := make([]frontend.Variable, 0)
+	hintInputs = append(hintInputs, i1)
+	hintInputs = append(hintInputs, in...)
+
+	res, _ := system.Compiler().NewHint(mod.MultiBigMulAndAddGetMod, 2, hintInputs...)
+	var sum frontend.Variable = 0
+	for i := 0; i < len(in); i += 2 {
+		sum = system.Add(sum, system.Mul(in[i], in[i+1]))
+	}
+	system.AssertIsEqual(system.Add(res[1], system.Mul(res[0], i1)), sum)
+
+	system.AssertIsLessOrEqual(res[1], i1)
+	system.AssertIsDifferent(res[1], i1)
+	return res[1]
 }
 
 // Mul returns res = i1 * i2 * ... in
@@ -457,28 +493,16 @@ func (system *r1cs) IsZero(i1 frontend.Variable) frontend.Variable {
 
 // Cmp returns 1 if i1>i2, 0 if i1=i2, -1 if i1<i2
 func (system *r1cs) Cmp(i1, i2 frontend.Variable) frontend.Variable {
-
-	vars, _ := system.toVariables(i1, i2)
-	bi1 := system.ToBinary(vars[0], system.BitLen())
-	bi2 := system.ToBinary(vars[1], system.BitLen())
-
-	res := system.toVariable(0)
-
-	for i := system.BitLen() - 1; i >= 0; i-- {
-
-		iszeroi1 := system.IsZero(bi1[i])
-		iszeroi2 := system.IsZero(bi2[i])
-
-		i1i2 := system.And(bi1[i], iszeroi2)
-		i2i1 := system.And(bi2[i], iszeroi1)
-
-		n := system.Select(i2i1, -1, 0)
-		m := system.Select(i1i2, 1, n)
-
-		res = system.Select(system.IsZero(res), m, res)
-
-	}
-	return res
+	// _v + 2 ** 252 - bound
+	// _v should be less than 2 ** 252
+	// bound should be less than 2 ** 252
+	temp := system.Add(i1, new(big.Int).Exp(new(big.Int).SetUint64(2), new(big.Int).SetInt64(int64(system.BitLen()-2)), nil))
+	temp = system.Sub(temp, i2)
+	bitsTemp := system.ToBinary(temp, system.BitLen())
+	eqResult := system.IsZero(system.Sub(i1, i2))
+	cmResult := bitsTemp[system.BitLen()-2]
+	cmResult = system.Select(cmResult, 1, -1)
+	return system.Select(eqResult, 0, cmResult)
 }
 
 // Println enables circuit debugging and behaves almost like fmt.Println()

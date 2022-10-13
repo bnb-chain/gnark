@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	fSave   = flag.Bool("s", false, "save new stats in file ")
+	fSave   = true
 	fFilter = flag.String("run", "", "filter runs with regexp; example 'pairing*'")
 )
 
@@ -65,7 +65,7 @@ func main() {
 		}
 	}
 
-	if *fSave {
+	if fSave {
 		const refPath = "../latest.stats"
 		if err := s.Save(refPath); err != nil {
 			log.Fatal(err)

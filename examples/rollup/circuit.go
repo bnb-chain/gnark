@@ -158,9 +158,16 @@ func verifyTransferSignature(api frontend.API, t TransferConstraints, hFunc mimc
 	if err != nil {
 		return err
 	}
-
 	hFunc.Reset()
-	err = eddsa.Verify(curve, t.Signature, htransfer, t.SenderPubKey, &hFunc)
+
+	var batchStores = eddsa.CreateBatchStores()
+	_ = eddsa.Verify(batchStores, curve, t.Signature, htransfer, t.SenderPubKey, 1, &hFunc)
+	_ = eddsa.Verify(batchStores, curve, t.Signature, htransfer, t.SenderPubKey, 1, &hFunc)
+	_ = eddsa.Verify(batchStores, curve, t.Signature, htransfer, t.SenderPubKey, 0, &hFunc)
+	_ = eddsa.Verify(batchStores, curve, t.Signature, htransfer, t.SenderPubKey, 0, &hFunc)
+
+	err = eddsa.Flush(batchStores, curve, &hFunc)
+
 	if err != nil {
 		return err
 	}

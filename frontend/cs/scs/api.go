@@ -18,6 +18,7 @@ package scs
 
 import (
 	"fmt"
+	"github.com/consensys/gnark/std/math/mod"
 	"math/big"
 	"path/filepath"
 	"reflect"
@@ -83,6 +84,43 @@ func (system *scs) Neg(i1 frontend.Variable) frontend.Variable {
 		v.SetCoeffID(c)
 		return v
 	}
+}
+
+// MulModP returns res = i1 * i2 * ... in
+func (system *scs) MulModP(i1, i2, i3 frontend.Variable) frontend.Variable {
+	res, _ := system.Compiler().NewHint(mod.BigMulModP, 2, i1, i2, i3)
+	//system.AssertIsEqual(res[0], system.Div(system.Mul(i1, i2), i3))
+	system.AssertIsEqual(system.Add(res[1], system.Mul(res[0], i3)), system.Mul(i1, i2))
+	system.AssertIsLessOrEqual(res[1], i3)
+	system.AssertIsDifferent(res[1], i3)
+	return res[1]
+}
+
+// MulModP returns res = i1 * i2 * ... in
+func (system *scs) AddModP(i1, i2, i3 frontend.Variable) frontend.Variable {
+	res, _ := system.Compiler().NewHint(mod.BigAddModP, 2, i1, i2, i3)
+	//system.AssertIsEqual(res[0], system.Div(system.Add(i1, i2), i3))
+	system.AssertIsEqual(system.Add(res[1], system.Mul(res[0], i3)), system.Add(i1, i2))
+	system.AssertIsLessOrEqual(res[1], i3)
+	system.AssertIsDifferent(res[1], i3)
+	return res[1]
+}
+
+func (system *scs) MultiBigMulAndAddGetMod(i1 frontend.Variable, in ...frontend.Variable) frontend.Variable {
+	hintInputs := make([]frontend.Variable, 0)
+	hintInputs = append(hintInputs, i1)
+	hintInputs = append(hintInputs, in...)
+
+	res, _ := system.Compiler().NewHint(mod.MultiBigMulAndAddGetMod, 2, hintInputs...)
+	var sum frontend.Variable = 0
+	for i := 0; i < len(in); i += 2 {
+		sum = system.Add(sum, system.Mul(in[i], in[i+1]))
+	}
+	system.AssertIsEqual(system.Add(res[1], system.Mul(res[0], i1)), sum)
+
+	system.AssertIsLessOrEqual(res[1], i1)
+	system.AssertIsDifferent(res[1], i1)
+	return res[1]
 }
 
 // Mul returns res = i1 * i2 * ... in

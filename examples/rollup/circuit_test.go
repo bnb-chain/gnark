@@ -17,6 +17,7 @@ limitations under the License.
 package rollup
 
 import (
+	"github.com/consensys/gnark/backend"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -77,7 +78,7 @@ func TestCircuitSignature(t *testing.T) {
 	assert := test.NewAssert(t)
 
 	var signatureCircuit circuitSignature
-	assert.ProverSucceeded(&signatureCircuit, &operator.witnesses, test.WithCurves(ecc.BN254), test.WithCompileOpts(frontend.IgnoreUnconstrainedInputs()))
+	assert.ProverSucceeded(&signatureCircuit, &operator.witnesses, test.WithCurves(ecc.BN254), test.WithBackends(backend.GROTH16), test.WithCompileOpts(frontend.IgnoreUnconstrainedInputs()))
 
 }
 
