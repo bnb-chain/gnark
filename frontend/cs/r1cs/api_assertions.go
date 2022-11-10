@@ -83,6 +83,22 @@ func (system *r1cs) AssertIsLessOrEqual(_v frontend.Variable, bound frontend.Var
 	system.AssertIsLessOrEqualN(_v, bound, system.BitLen())
 }
 
+func (system *r1cs) AssertIsLess(_v frontend.Variable, bound frontend.Variable) {
+	system.AssertIsLessN(_v, bound, system.BitLen())
+}
+
+func (system *r1cs) AssertIsLessN(_v frontend.Variable, bound frontend.Variable, n int) {
+	// _v + 2 ** 252 - bound
+	// _v should be less than 2 ** 252
+	// bound should be less than 2 ** 252
+	temp := system.Add(_v, new(big.Int).Exp(new(big.Int).SetUint64(2), new(big.Int).SetInt64(int64(n-2)), nil))
+	temp = system.Sub(temp, bound)
+	bitsTemp := system.ToBinary(temp, n)
+	cmResult := system.IsZero(bitsTemp[n-2])
+
+	system.AssertIsEqual(cmResult, 1)
+}
+
 func (system *r1cs) AssertIsLessOrEqualN(_v frontend.Variable, bound frontend.Variable, n int) {
 	// _v + 2 ** 252 - bound
 	// _v should be less than 2 ** 252

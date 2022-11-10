@@ -319,6 +319,29 @@ func (e *engine) AssertIsBoolean(i1 frontend.Variable) {
 	e.mustBeBoolean(&b1)
 }
 
+func (e *engine) AssertIsLess(v frontend.Variable, bound frontend.Variable) {
+
+	bValue := e.toBigInt(bound)
+	vValue := e.toBigInt(v)
+
+	if bValue.Sign() == -1 {
+		panic(fmt.Sprintf("[AssertIsLessOrEqual] bound (%s) must be positive", bValue.String()))
+	}
+
+	if bValue.BitLen() > 252 {
+		panic(fmt.Sprintf("[AssertIsLessOrEqual] bit lens (%s) must be less than 252", bValue.String()))
+	}
+
+	if vValue.BitLen() > 252 {
+		panic(fmt.Sprintf("[AssertIsLessOrEqual] bit lens (%s) must be less than 252", bValue.String()))
+	}
+
+	b1 := e.toBigInt(v)
+	if b1.Cmp(&bValue) == 1 {
+		panic(fmt.Sprintf("[AssertIsLessOrEqual] %s > %s", b1.String(), bValue.String()))
+	}
+}
+
 func (e *engine) AssertIsLessOrEqual(v frontend.Variable, bound frontend.Variable) {
 
 	bValue := e.toBigInt(bound)

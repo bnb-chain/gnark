@@ -92,8 +92,7 @@ func (system *r1cs) MulModP(i1, i2, i3 frontend.Variable) frontend.Variable {
 	res, _ := system.Compiler().NewHint(mod.BigMulModP, 2, i1, i2, i3)
 	//system.AssertIsEqual(res[0], system.Div(system.Mul(i1, i2), i3))
 	system.AssertIsEqual(system.Add(res[1], system.Mul(res[0], i3)), system.Mul(i1, i2))
-	system.AssertIsLessOrEqual(res[1], i3)
-	system.AssertIsDifferent(res[1], i3)
+	system.AssertIsLess(res[1], i3)
 	return res[1]
 }
 
@@ -101,8 +100,7 @@ func (system *r1cs) AddModP(i1, i2, i3 frontend.Variable) frontend.Variable {
 	res, _ := system.Compiler().NewHint(mod.BigAddModP, 2, i1, i2, i3)
 	//system.AssertIsEqual(res[0], system.Div(system.Add(i1, i2), i3))
 	system.AssertIsEqual(system.Add(res[1], system.Mul(res[0], i3)), system.Add(i1, i2))
-	system.AssertIsLessOrEqual(res[1], i3)
-	system.AssertIsDifferent(res[1], i3)
+	system.AssertIsLess(res[1], i3)
 	return res[1]
 }
 
