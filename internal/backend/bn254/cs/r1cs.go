@@ -798,7 +798,7 @@ func (cs *R1CS) ReadFrom(r io.Reader) (int64, error) {
 		return int64(decoder.NumBytesRead()), err
 	}
 
-	if _, ok := os.LookupEnv("WITHDEBUGINFO"); !ok {
+	if _, ok := os.LookupEnv("GNARK_DEBUG_INFO"); !ok {
 		cs.DebugInfo = make([]compiled.LogEntry, 0)
 		cs.MDebug = make(map[int]int, 0)
 	}
