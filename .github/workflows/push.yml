@@ -75,18 +75,3 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: |
         go test -v -timeout=50m -race -short ./...
-  
-  slack-workflow-status:
-    if: always()
-    name: post workflow status to slack
-    needs:
-      - staticcheck
-      - test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Build notification
-        uses: Gamesight/slack-workflow-status@master
-        with:
-          repo_token: ${{secrets.GITHUB_TOKEN}}
-          slack_webhook_url: ${{secrets.SLACK_WEBHOOK_URL}}
-          channel: '#team-gnark-build'

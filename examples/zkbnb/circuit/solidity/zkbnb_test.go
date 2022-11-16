@@ -52,11 +52,6 @@ func TestCompileCircuit(t *testing.T) {
 	}
 }
 
-func TestExportSol(t *testing.T) {
-	differentBlockSizes := []int{1, 10}
-	exportSol(differentBlockSizes)
-}
-
 func TestExportSolSmall(t *testing.T) {
 	differentBlockSizes := []int{1}
 	exportSol(differentBlockSizes)
