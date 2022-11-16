@@ -17,7 +17,6 @@
 package groth16
 
 import (
-	"github.com/consensys/gnark-crypto/ecc/bn254"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
 	"os"
 
@@ -454,7 +453,7 @@ func ProveRoll(r1cs *cs.R1CS, pkE, pkB2 *ProvingKey, witness bn254witness.Witnes
 		}()
 		<-chBs2Done
 
-		pkB2.G2.B = make([]bn254.G2Affine, 0)
+		pkB2.G2.B = make([]curve.G2Affine, 0)
 	}
 	runtime.GC()
 
