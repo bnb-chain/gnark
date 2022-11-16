@@ -259,8 +259,7 @@ func (pk *ProvingKey) writeTo(w io.Writer, raw bool) (int64, error) {
 }
 
 func (pk *ProvingKey) writeETo(w io.Writer) (int64, error) {
-	var enc *curve.Encoder
-	enc = curve.NewEncoder(w, curve.RawEncoding())
+	var enc = curve.NewEncoder(w, curve.RawEncoding())
 	nbWires := uint64(len(pk.InfinityA))
 
 	toEncode := []interface{}{
@@ -293,8 +292,7 @@ func (pk *ProvingKey) writeETo(w io.Writer) (int64, error) {
 }
 
 func (pk *ProvingKey) writeATo(w io.Writer) (int64, error) {
-	var enc *curve.Encoder
-	enc = curve.NewEncoder(w, curve.RawEncoding())
+	var enc = curve.NewEncoder(w, curve.RawEncoding())
 
 	toEncode := []interface{}{
 		pk.G1.A,
@@ -315,8 +313,7 @@ func (pk *ProvingKey) writeATo(w io.Writer) (int64, error) {
 }
 
 func (pk *ProvingKey) writeB1To(w io.Writer) (int64, error) {
-	var enc *curve.Encoder
-	enc = curve.NewEncoder(w, curve.RawEncoding())
+	var enc = curve.NewEncoder(w, curve.RawEncoding())
 
 	toEncode := []interface{}{
 		//pk.G1.A,
@@ -337,8 +334,7 @@ func (pk *ProvingKey) writeB1To(w io.Writer) (int64, error) {
 }
 
 func (pk *ProvingKey) writeB2To(w io.Writer) (int64, error) {
-	var enc *curve.Encoder
-	enc = curve.NewEncoder(w, curve.RawEncoding())
+	var enc = curve.NewEncoder(w, curve.RawEncoding())
 
 	toEncode := []interface{}{
 		//pk.G1.A,
@@ -359,8 +355,7 @@ func (pk *ProvingKey) writeB2To(w io.Writer) (int64, error) {
 }
 
 func (pk *ProvingKey) writeZTo(w io.Writer) (int64, error) {
-	var enc *curve.Encoder
-	enc = curve.NewEncoder(w, curve.RawEncoding())
+	var enc = curve.NewEncoder(w, curve.RawEncoding())
 
 	toEncode := []interface{}{
 		//pk.G1.A,
@@ -381,8 +376,7 @@ func (pk *ProvingKey) writeZTo(w io.Writer) (int64, error) {
 }
 
 func (pk *ProvingKey) writeKTo(w io.Writer) (int64, error) {
-	var enc *curve.Encoder
-	enc = curve.NewEncoder(w, curve.RawEncoding())
+	var enc = curve.NewEncoder(w, curve.RawEncoding())
 
 	toEncode := []interface{}{
 		//pk.G1.A,

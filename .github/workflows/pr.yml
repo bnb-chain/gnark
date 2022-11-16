@@ -35,14 +35,8 @@ jobs:
     - name: gosec
       run: |
         go install github.com/securego/gosec/v2/cmd/gosec@latest
-        gosec -exclude G204 ./...
-    - name: generated files should not be modified
-      run: |
-        go generate ./...
-        git update-index --assume-unchanged go.mod
-        git update-index --assume-unchanged go.sum
-        if [[ -n $(git status --porcelain) ]]; then echo "git repo is dirty after runing go generate -- please don't modify generated files"; echo $(git diff);echo $(git status --porcelain); exit 1; fi
-  
+        gosec -exclude G204 -exclude G304 ./...
+
   test:
     strategy:
       matrix:

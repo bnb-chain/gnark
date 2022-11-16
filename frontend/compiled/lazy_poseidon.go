@@ -154,7 +154,7 @@ func StaticPermutation(V frontend.Variable, state []LinearExpression, Coefs Coef
 	}
 	stateCopy, r1csFullRound1, wid := StaticFullRound(stateCopy, V, Coefs, &roundCounter, V.(LinearExpression)[0].WireID()-GetConstraintsNumLinear(state[1:]))
 	stateCopy, r1csPartial1, wid := StaticPartial(stateCopy, V, Coefs, &roundCounter, wid)
-	stateCopy, r1csFullRound2, wid := StaticFullRound(stateCopy, V, Coefs, &roundCounter, wid)
+	_, r1csFullRound2, _ := StaticFullRound(stateCopy, V, Coefs, &roundCounter, wid)
 
 	resutls := make([]R1C, 0)
 	resutls = append(resutls, r1csFullRound1...)
@@ -334,7 +334,7 @@ func StaticMixR1C(state []LinearExpression, Coefs CoeffTable) []LinearExpression
 			}
 
 			r0, isContant := ConstantValue(state[j], Coefs)
-			mul := make(LinearExpression, 0)
+			var mul LinearExpression
 			if isContant {
 				r02 := r0.Mul(r0, constants.MDS[index][i][j])
 				r02.Mod(r02, mod)
@@ -428,10 +428,7 @@ func IsConstant(v LinearExpression) bool {
 		return false
 	}
 	_, vID, visibility := v[0].Unpack()
-	if !(vID == 0 && visibility == schema.Public) {
-		return false
-	}
-	return true
+	return vID == 0 && visibility == schema.Public
 }
 
 func (le *LazyPoseidonInputs) GetConstraintsNum() int {
