@@ -1,4 +1,4 @@
-package poseidon_bak
+package poseidon
 
 import (
 	"math/big"
@@ -29,6 +29,11 @@ type poseidonCircuit30 struct {
 	Data [30]frontend.Variable
 }
 
+type poseidonCircuit256 struct {
+	Hash frontend.Variable `gnark:"data,public"`
+	Data [256]frontend.Variable
+}
+
 func (circuit *poseidonCircuit2) Define(api frontend.API) error {
 	result := Poseidon(api, circuit.Data[:]...)
 	api.AssertIsEqual(result, circuit.Hash)
@@ -52,9 +57,16 @@ func (circuit *poseidonCircuit30) Define(api frontend.API) error {
 	api.AssertIsEqual(result, circuit.Hash)
 	return nil
 }
+
+func (circuit *poseidonCircuit256) Define(api frontend.API) error {
+	result := Poseidon(api, circuit.Data[:]...)
+	api.AssertIsEqual(result, circuit.Hash)
+	return nil
+}
+
 func TestPoseidon2(t *testing.T) {
 	assert := test.NewAssert(t)
-	var circuit, witness, wrongWitness poseidonCircuit2
+	var circuit, witness poseidonCircuit2
 	hash, _ := new(big.Int).SetString("115cc0f5e7d690413df64c6b9662e9cf2a3617f2743245519e19607a4417189a", 16)
 
 	// Test completeness
@@ -63,14 +75,7 @@ func TestPoseidon2(t *testing.T) {
 		witness.Data[i] = frontend.Variable(i + 1)
 	}
 	witness.Hash = hash
-	assert.SolvingSucceeded(&circuit, &witness, test.WithCurves(ecc.BN254))
-
-	// Test soundness
-	for i := 0; i < size; i++ {
-		wrongWitness.Data[i] = frontend.Variable(i + 2)
-	}
-	wrongWitness.Hash = hash
-	assert.SolvingFailed(&circuit, &wrongWitness, test.WithCurves(ecc.BN254))
+	assert.SolvingSucceeded(&circuit, &witness, test.WithCurves(ecc.BN254), test.WithCompileOpts(frontend.IgnoreUnconstrainedInputs()))
 }
 
 func TestPoseidon4(t *testing.T) {
@@ -124,6 +129,27 @@ func TestPoseidon30(t *testing.T) {
 
 	// Test completeness
 	size := 30
+	for i := 0; i < size; i++ {
+		witness.Data[i] = frontend.Variable(i + 1)
+	}
+	witness.Hash = hash
+	assert.SolvingSucceeded(&circuit, &witness, test.WithCurves(ecc.BN254))
+
+	// Test soundness
+	for i := 0; i < size; i++ {
+		wrongWitness.Data[i] = frontend.Variable(i + 2)
+	}
+	wrongWitness.Hash = hash
+	assert.SolvingFailed(&circuit, &wrongWitness, test.WithCurves(ecc.BN254))
+}
+
+func TestPoseidon256(t *testing.T) {
+	assert := test.NewAssert(t)
+	var circuit, witness, wrongWitness poseidonCircuit256
+	hash, _ := new(big.Int).SetString("15b218692488b5ce4c9f8571e7daef78bd39cc455d431572f5f5f2933e4f5ea2", 16)
+
+	// Test completeness
+	size := 256
 	for i := 0; i < size; i++ {
 		witness.Data[i] = frontend.Variable(i + 1)
 	}

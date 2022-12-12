@@ -142,7 +142,11 @@ func (circuit *Circuit) Define(api frontend.API) error {
 		}
 
 		p := poseidon.Poseidon(api, circuit.Transfers[i].Nonce, circuit.Transfers[i].Amount)
-		poseidon.Poseidon(api, p, circuit.Transfers[i].Amount)
+		target := make([]frontend.Variable, 256)
+		for i := range target {
+			target[i] = p
+		}
+		poseidon.Poseidon(api, target...)
 
 		// update the accounts
 		verifyAccountUpdated(api, circuit.SenderAccountsBefore[i], circuit.ReceiverAccountsBefore[i], circuit.SenderAccountsAfter[i], circuit.ReceiverAccountsAfter[i], circuit.Transfers[i].Amount)

@@ -252,9 +252,9 @@ func (cs *R1CS) IsSolved(witness *witness.Witness, opts ...backend.ProverOption)
 		return err
 	}
 
-	a := make([]fr.Element, len(cs.Constraints))
-	b := make([]fr.Element, len(cs.Constraints))
-	c := make([]fr.Element, len(cs.Constraints))
+	a := make([]fr.Element, len(cs.Constraints)+cs.LazyCons.GetConstraintsAll())
+	b := make([]fr.Element, len(cs.Constraints)+cs.LazyCons.GetConstraintsAll())
+	c := make([]fr.Element, len(cs.Constraints)+cs.LazyCons.GetConstraintsAll())
 	v := witness.Vector.(*bn254witness.Witness)
 	_, err = cs.Solve(*v, a, b, c, opt)
 	return err

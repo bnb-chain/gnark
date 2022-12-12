@@ -2,9 +2,10 @@ package poseidon
 
 import (
 	"github.com/consensys/gnark/backend/hint"
-	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/compiled"
 	"github.com/consensys/gnark/std/hash/poseidon/constants"
+
+	"github.com/consensys/gnark/frontend"
 )
 
 // power 5 as s-box
@@ -98,18 +99,41 @@ func preHandleData(api frontend.API, data ...frontend.Variable) []frontend.Varia
 	return data
 }
 
-func Poseidon(api frontend.API, data ...frontend.Variable) frontend.Variable {
-	data = preHandleData(api, data...)
-	// we record 2 params first, then lets see if we can record multi params and solve
-	t := len(data) + 1
-	if t < 3 || t > 13 {
+func Poseidon(api frontend.API, input ...frontend.Variable) frontend.Variable {
+	input = preHandleData(api, input...)
+	inputLength := len(input)
+	// No support for hashing inputs of length less than 2
+	if inputLength < 2 {
 		panic("Not supported input size")
 	}
-	vInternal := api.AddInternalVariableWithLazy(compiled.GetConstraintsNum(data, api))
-	api.AddLazyPoseidon(vInternal, data...)
-	state := make([]frontend.Variable, t)
+
+	const maxLength = 12
+	state := make([]frontend.Variable, maxLength+1)
 	state[0] = frontend.Variable(0)
-	copy(state[1:], data)
-	state = permutation(api, state)
+	startIndex := 0
+	lastIndex := 0
+
+	// Make a hash chain of the input if its length > maxLength
+	if inputLength > maxLength {
+		count := inputLength / maxLength
+		for i := 0; i < count; i++ {
+			lastIndex = (i + 1) * maxLength
+			copy(state[1:], input[startIndex:lastIndex])
+			v := api.AddInternalVariableWithLazy(compiled.GetConstraintsNum(state[1:], api))
+			api.AddLazyPoseidon(v, state[1:]...)
+			state = permutation(api, state)
+			startIndex = lastIndex
+		}
+	}
+
+	// For the remaining part of the input OR if 2 <= inputLength <= 12
+	if lastIndex < inputLength {
+		lastIndex = inputLength
+		remainigLength := lastIndex - startIndex
+		copy(state[1:], input[startIndex:lastIndex])
+		v := api.AddInternalVariableWithLazy(compiled.GetConstraintsNum(state[1:remainigLength+1], api))
+		api.AddLazyPoseidon(v, state[1:remainigLength+1]...)
+		state = permutation(api, state[:remainigLength+1])
+	}
 	return state[0]
 }
