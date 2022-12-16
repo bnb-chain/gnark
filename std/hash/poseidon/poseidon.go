@@ -76,17 +76,6 @@ func permutation(api frontend.API, state []frontend.Variable) []frontend.Variabl
 }
 
 func preHandleData(api frontend.API, data ...frontend.Variable) []frontend.Variable {
-	// if all constants, skipped
-	constantCount := 0
-	for i := range data {
-		if _, isConstant := api.Compiler().ConstantValue(data[i]); isConstant {
-			constantCount++
-		}
-	}
-	if constantCount == len(data) {
-		return data
-	}
-
 	// get the self variables by hint, and make sure it is equal to data[i]
 	for i := range data {
 		self, err := api.Compiler().NewHint(hint.Self, 1, data[i])
@@ -109,7 +98,7 @@ func Poseidon(api frontend.API, input ...frontend.Variable) frontend.Variable {
 
 	const maxLength = 12
 	state := make([]frontend.Variable, maxLength+1)
-	state[0] = frontend.Variable(0)
+	state[0] = preHandleData(api, frontend.Variable(0))[0]
 	startIndex := 0
 	lastIndex := 0
 
@@ -119,8 +108,8 @@ func Poseidon(api frontend.API, input ...frontend.Variable) frontend.Variable {
 		for i := 0; i < count; i++ {
 			lastIndex = (i + 1) * maxLength
 			copy(state[1:], input[startIndex:lastIndex])
-			v := api.AddInternalVariableWithLazy(compiled.GetConstraintsNum(state[1:], api))
-			api.AddLazyPoseidon(v, state[1:]...)
+			v := api.AddInternalVariableWithLazy(compiled.GetConstraintsNum(state[:], api))
+			api.AddLazyPoseidon(v, state[:]...)
 			state = permutation(api, state)
 			startIndex = lastIndex
 		}
@@ -131,8 +120,8 @@ func Poseidon(api frontend.API, input ...frontend.Variable) frontend.Variable {
 		lastIndex = inputLength
 		remainigLength := lastIndex - startIndex
 		copy(state[1:], input[startIndex:lastIndex])
-		v := api.AddInternalVariableWithLazy(compiled.GetConstraintsNum(state[1:remainigLength+1], api))
-		api.AddLazyPoseidon(v, state[1:remainigLength+1]...)
+		v := api.AddInternalVariableWithLazy(compiled.GetConstraintsNum(state[:remainigLength+1], api))
+		api.AddLazyPoseidon(v, state[:remainigLength+1]...)
 		state = permutation(api, state[:remainigLength+1])
 	}
 	return state[0]

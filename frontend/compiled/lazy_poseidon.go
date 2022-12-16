@@ -23,15 +23,11 @@ func FetchLazyConstraint(S []LinearExpression, staticR1c []R1C, j int, Coefs Coe
 	// s0 + v, s2, s3 2
 
 	for i := range S {
-		// if it is constant, we just skipped the r1c, because constant will not generate first 3 r1c
-		if _, isConstant := ConstantValue(S[i], Coefs); isConstant {
-			continue
-		}
 		if j == i*3 {
 			zero := LinearExpression{Pack(0, CoeffIdZero, schema.Public)}
 			addRes := S[i]
 			one := LinearExpression{Pack(0, CoeffIdOne, schema.Public)}
-			cID := Coefs.GetCoeffID(constants.RC[len(S)-2][i+1])
+			cID := Coefs.GetCoeffID(constants.RC[len(S)-3][i])
 
 			if cID == -1 {
 				os.Exit(-1)
@@ -64,7 +60,7 @@ func FetchLazyConstraint(S []LinearExpression, staticR1c []R1C, j int, Coefs Coe
 			zero := LinearExpression{Pack(0, CoeffIdZero, schema.Public)}
 			addRes := S[i]
 			one := LinearExpression{Pack(0, CoeffIdOne, schema.Public)}
-			cID := Coefs.GetCoeffID(constants.RC[len(S)-2][i+1])
+			cID := Coefs.GetCoeffID(constants.RC[len(S)-3][i])
 
 			if cID == -1 {
 				os.Exit(-1)
@@ -109,39 +105,23 @@ func FetchLazyConstraint(S []LinearExpression, staticR1c []R1C, j int, Coefs Coe
 var ConstraintsMap []int
 
 func init() {
-	ConstraintsMap = []int{240, 261, 297, 321, 354, 381, 402, 417, 459, 465, 504}
+	ConstraintsMap = []int{243, 264, 300, 324, 357, 384, 405, 420, 462, 468, 507}
 }
 
 func GetConstraintsNum(variables []frontend.Variable, api frontend.API) int {
-	constantNum := 0
-	for _, s := range variables {
-		if _, t := api.Compiler().ConstantValue(s); t {
-			constantNum++
-		}
-	}
-	if constantNum == len(variables) {
-		return 0
-	}
-	return ConstraintsMap[len(variables)-2] - constantNum*3
+	return ConstraintsMap[len(variables)-3]
 }
 func GetConstraintsNumLinear(variables []LinearExpression) int {
-	constantNum := 0
-	for _, s := range variables {
-		if t := IsConstant(s); t {
-			constantNum++
-		}
-	}
-	return ConstraintsMap[len(variables)-2] - constantNum*3
+	return ConstraintsMap[len(variables)-3]
 }
 
 func StaticPoseidonR1CS(v frontend.Variable, Coefs CoeffTable, data ...LinearExpression) []R1C {
-	t := len(data) + 1
+	t := len(data)
 	if t < 3 || t > 13 {
 		panic("Not supported input size")
 	}
 	state := make([]LinearExpression, t)
-	state[0] = LinearExpression{Pack(0, CoeffIdZero, schema.Public)}
-	copy(state[1:], data)
+	copy(state[:], data)
 
 	return StaticPermutation(v, state, Coefs)
 }
@@ -152,7 +132,7 @@ func StaticPermutation(V frontend.Variable, state []LinearExpression, Coefs Coef
 	for i := 0; i < len(stateCopy); i++ {
 		stateCopy[i] = state[i].Clone()
 	}
-	stateCopy, r1csFullRound1, wid := StaticFullRound(stateCopy, V, Coefs, &roundCounter, V.(LinearExpression)[0].WireID()-GetConstraintsNumLinear(state[1:]))
+	stateCopy, r1csFullRound1, wid := StaticFullRound(stateCopy, V, Coefs, &roundCounter, V.(LinearExpression)[0].WireID()-GetConstraintsNumLinear(state))
 	stateCopy, r1csPartial1, wid := StaticPartial(stateCopy, V, Coefs, &roundCounter, wid)
 	_, r1csFullRound2, _ := StaticFullRound(stateCopy, V, Coefs, &roundCounter, wid)
 
@@ -423,22 +403,8 @@ func ConstantValue(v LinearExpression, Coefs CoeffTable) (*big.Int, bool) {
 	return new(big.Int).Set(Coefs.GetCoeffsById(cID)), true
 }
 
-func IsConstant(v LinearExpression) bool {
-	if len(v) != 1 {
-		return false
-	}
-	_, vID, visibility := v[0].Unpack()
-	return vID == 0 && visibility == schema.Public
-}
-
 func (le *LazyPoseidonInputs) GetConstraintsNum() int {
-	constantNum := 0
-	for _, s := range le.S {
-		if IsConstant(s) {
-			constantNum++
-		}
-	}
-	return ConstraintsMap[len(le.S)-2] - constantNum*3
+	return ConstraintsMap[len(le.S)-3]
 }
 
 func (le *LazyPoseidonInputs) FetchLazy(j int, r1cs *R1CS, coefs CoeffTable) R1C {
