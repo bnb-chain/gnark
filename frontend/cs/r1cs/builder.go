@@ -49,10 +49,19 @@ func NewBuilder(curve ecc.ID, config frontend.CompileConfig) (frontend.Builder, 
 	return newBuilder(curve, config), nil
 }
 
+type GkrMeta struct {
+	// if mimc hints > 0 then we will start to add extra constraint
+	MIMCHints         []int
+	GKRConstraintsPos int
+	GKRInputTables    []compiled.LinearExpression
+	GKROutputTables   []compiled.LinearExpression
+}
+
 type r1cs struct {
 	compiled.ConstraintSystem
 	Constraints []compiled.R1C
 	LazyCons    []compiled.LazyInputs
+	GkrMeta     GkrMeta
 
 	st     cs.CoeffTable
 	config frontend.CompileConfig
@@ -220,6 +229,12 @@ func (system *r1cs) AddLazyPoseidon(v frontend.Variable, s ...frontend.Variable)
 	}
 	lazyPosiedonCons := newLazyPoseidonEncInputs(sLinear, v.(compiled.LinearExpression), len(system.Constraints))
 	system.LazyCons = append(system.LazyCons, &lazyPosiedonCons)
+}
+
+func (system *r1cs) AddGKRInputsAndOutputsMarks(inputs []frontend.Variable, outputs []frontend.Variable) {
+	system.GkrMeta.GKRConstraintsPos = len(system.Constraints)
+	system.GkrMeta.GKRInputTables, _ = system.toVariables(inputs...)
+	system.GkrMeta.GKROutputTables, _ = system.toVariables(outputs...)
 }
 
 // Term packs a Variable and a coeff in a Term and returns it.
@@ -413,10 +428,38 @@ func (cs *r1cs) Compile() (frontend.CompiledConstraintSystem, error) {
 		ConstraintSystem:       cs.ConstraintSystem,
 		Constraints:            cs.Constraints,
 		LazyCons:               cs.LazyCons,
+		MIMCHints:              cs.GkrMeta.MIMCHints,
 		LazyConsMap:            map[int]compiled.LazyIndexedInputs{},
 		LazyConsStaticR1CMap:   map[string][]compiled.R1C{},
 		LazyConsOriginInputMap: map[string]compiled.LazyInputs{},
+		GKRConstraintsPos:      cs.GkrMeta.GKRConstraintsPos,
 	}
+
+	// adding constraint for gkr inputs / gkr outputs
+	for i := range cs.GkrMeta.MIMCHints {
+		h := *cs.MHints[cs.GkrMeta.MIMCHints[i]]
+
+		hInputsVariable := make([]frontend.Variable, len(h.Inputs))
+		for j := range hInputsVariable {
+			hInputsVariable[j] = h.Inputs[i]
+		}
+		hInputVids, _ := cs.toVariables(hInputsVariable...)
+
+		hOutputVid := compiled.LinearExpression{
+			compiled.Pack(h.Wires[0], compiled.CoeffIdOne, schema.Internal),
+		}
+		li0 := cs.GkrMeta.GKRInputTables[i]
+		li1 := cs.GkrMeta.GKRInputTables[i+2]
+
+		lo := cs.GkrMeta.GKROutputTables[i]
+		// input constraint
+		cs.addConstraint(compiled.R1C{L: cs.one(), R: hInputVids[0].Clone(), O: li0.Clone()})
+		cs.addConstraint(compiled.R1C{L: cs.one(), R: hInputVids[1].Clone(), O: li1.Clone()})
+
+		// output constraint
+		cs.addConstraint(compiled.R1C{L: cs.one(), R: hOutputVid.Clone(), O: lo.Clone()})
+	}
+	res.Constraints = cs.Constraints
 
 	// sanity check
 	if res.NbPublicVariables != len(cs.Public) || res.NbPublicVariables != cs.Schema.NbPublic+1 {
@@ -425,9 +468,9 @@ func (cs *r1cs) Compile() (frontend.CompiledConstraintSystem, error) {
 	if res.NbSecretVariables != len(cs.Secret) || res.NbSecretVariables != cs.Schema.NbSecret {
 		panic("number of secret variables is inconsitent") // it grew after the schema parsing?
 	}
-
 	// build levels
-	res.Levels = buildLevels(res)
+	res.Levels, res.GKRConstraintsLvl = buildLevels(res)
+	fmt.Println(res.GKRConstraintsLvl)
 
 	switch cs.CurveID {
 	case ecc.BLS12_377:
@@ -456,7 +499,7 @@ func (cs *r1cs) SetSchema(s *schema.Schema) {
 	cs.NbSecretVariables = s.NbSecret
 }
 
-func buildLevels(ccs compiled.R1CS) [][]int {
+func buildLevels(ccs compiled.R1CS) ([][]int, int) {
 
 	b := levelBuilder{
 		mWireToNode: make(map[int]int, ccs.NbInternalVariables), // at which node we resolved which wire
@@ -482,6 +525,18 @@ func buildLevels(ccs compiled.R1CS) [][]int {
 
 	}
 
+	gkrLevelsOffset := len(b.mLevels)
+	for cID, _ := range ccs.Constraints {
+		if cID >= ccs.GKRConstraintsPos {
+			b.mLevels[b.nodeLevels[cID]]--
+			b.nodeLevels[cID] = b.nodeLevels[cID] + gkrLevelsOffset
+			b.mLevels[b.nodeLevels[cID]]++
+		}
+		if cID == ccs.GKRConstraintsPos {
+			ccs.GKRConstraintsLvl = b.nodeLevels[cID]
+		}
+	}
+
 	levels := make([][]int, len(b.mLevels))
 	for i := 0; i < len(levels); i++ {
 		// allocate memory
@@ -492,7 +547,7 @@ func buildLevels(ccs compiled.R1CS) [][]int {
 		levels[l] = append(levels[l], n)
 	}
 
-	return levels
+	return levels, ccs.GKRConstraintsLvl
 }
 
 type levelBuilder struct {
@@ -691,6 +746,9 @@ func (system *r1cs) NewHint(f hint.Function, nbOutputs int, inputs ...frontend.V
 	ch := &compiled.Hint{ID: hintUUID, Inputs: hintInputs, Wires: varIDs}
 	for _, vID := range varIDs {
 		system.MHints[vID] = ch
+		if hint.Name(f) == hint.Name(hint.MIMC2Elements) {
+			system.GkrMeta.MIMCHints = append(system.GkrMeta.MIMCHints, vID)
+		}
 	}
 
 	return res, nil

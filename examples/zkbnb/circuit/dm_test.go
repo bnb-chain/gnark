@@ -18,6 +18,7 @@ import (
 	groth16_bn254 "github.com/consensys/gnark/internal/backend/bn254/groth16"
 	witness_bn254 "github.com/consensys/gnark/internal/backend/bn254/witness"
 	"github.com/consensys/gnark/test"
+	"math/big"
 	"os"
 	"runtime"
 	"testing"
@@ -252,11 +253,26 @@ func TestE2EWhole(t *testing.T) {
 		blockConstraints.Txs = make([]TxConstraints, blockConstraints.TxsCount)
 		for i := 0; i < blockConstraints.TxsCount; i++ {
 			blockConstraints.Txs[i] = GetZeroTxConstraint()
+			blockConstraints.Txs[i].TxType = 1
+			name, _ := new(big.Int).SetString("664794045869937614994138407401723391981891092480", 10)
+			nameHash, _ := new(big.Int).SetString("664794045869937614994138407401723391981891092480", 10)
+			blockConstraints.Txs[i].RegisterZnsTxInfo = RegisterZnsTxConstraints{
+				AccountIndex:    0,
+				AccountName:     name,
+				AccountNameHash: nameHash,
+			}
 		}
+		blockConstraints.BlockNumber = 1
+		blockConstraints.CreatedAt = 1668046315137
+		blockConstraints.OldStateRoot, _ = new(big.Int).SetString("3551382359636441862871309452087831100557317823941557027328679526938741459088", 10)
+		blockConstraints.NewStateRoot, _ = new(big.Int).SetString("20974848016518996273177442753151758410493967854962773609336992553021621143313", 10)
+		blockConstraints.BlockCommitment, _ = new(big.Int).SetString("15204551526355751698972323443986229008155582279153302948715248441321775104693", 10)
+
 		blockConstraints.GasAssetIds = gasAssetIds
 		blockConstraints.GasAccountIndex = gasAccountIndex
 		blockConstraints.Gas = GetZeroGasConstraints(gasAssetIds)
 	}
+
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Compile circuit
 	cccs := &backend_bn254.R1CS{}
@@ -328,12 +344,6 @@ func TestE2EWhole(t *testing.T) {
 
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Prove part by part
-	witnessFull = &witness.Witness{CurveID: ecc.BN254, Schema: cccs.Schema}
-	{
-		wBytes, err := os.ReadFile("witness_full")
-		assert.NoError(err, "read witness_full")
-		json.Unmarshal(wBytes, &witnessFull)
-	}
 	opt, _ := backend.NewProverConfig(backend.WithHints(zkbnb_types.Keccak256), backend.IgnoreSolverError())
 	proof, err := groth16_bn254.ProveRoll(cccs, &pkE, &pkB2, *witnessFull.Vector.(*witness_bn254.Witness), opt, session)
 	assert.NoError(err, "prove")

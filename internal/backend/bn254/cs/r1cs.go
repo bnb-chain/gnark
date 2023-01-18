@@ -20,7 +20,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/consensys/gnark/examples/gkr_mimc"
+	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs"
+	"github.com/consensys/gnark/std/gkr/examples"
+	"github.com/consensys/gnark/std/gkr/gkr"
 	"github.com/fxamacker/cbor/v2"
 	"io"
 	"math/big"
@@ -76,7 +80,7 @@ func (cs *R1CS) Solve(witness, a, b, c []fr.Element, opt backend.ProverConfig) (
 	log := logger.Logger().With().Str("curve", cs.CurveID().String()).Int("nbConstraints", len(cs.Constraints)).Str("backend", "groth16").Logger()
 
 	nbWires := cs.NbPublicVariables + cs.NbSecretVariables + cs.NbInternalVariables
-	solution, err := newSolution(nbWires, opt.HintFunctions, cs.MHintsDependencies, cs.MHints, cs.Coefficients)
+	solution, err := newSolution(nbWires, opt.HintFunctions, cs.MHintsDependencies, cs.MHints, cs.Coefficients, cs.MIMCHints)
 	if err != nil {
 		return make([]fr.Element, nbWires), err
 	}
@@ -102,6 +106,7 @@ func (cs *R1CS) Solve(witness, a, b, c []fr.Element, opt backend.ProverConfig) (
 	for i := 0; i < len(witness); i++ {
 		solution.solved[i+1] = true
 	}
+	solution.InitialValuesLength = len(witness) + 1
 
 	// keep track of the number of wire instantiations we do, for a sanity check to ensure
 	// we instantiated all wires
@@ -172,7 +177,6 @@ func (cs *R1CS) parallelSolve(a, b, c []fr.Element, solution *solution) error {
 			}
 		}()
 	}
-
 	// clean up pool go routines
 	defer func() {
 		close(chTasks)
@@ -180,8 +184,11 @@ func (cs *R1CS) parallelSolve(a, b, c []fr.Element, solution *solution) error {
 	}()
 
 	// for each level, we push the tasks
-	for _, level := range cs.Levels {
+	for i, level := range cs.Levels {
 
+		if i == cs.GKRConstraintsLvl {
+			cs.assignGKRProofs(solution)
+		}
 		// max CPU to use
 		maxCPU := float64(len(level)) / minWorkPerCPU
 
@@ -240,8 +247,52 @@ func (cs *R1CS) parallelSolve(a, b, c []fr.Element, solution *solution) error {
 			return <-chError
 		}
 	}
-
 	return nil
+}
+
+func (cs *R1CS) assignGKRProofs(s *solution) {
+
+	var bN = 1
+
+	// Creates the assignments values
+	nativeCircuit := examples.CreateMimcCircuit()
+	inputs := make([][]fr.Element, 1)
+	inputs[0] = make([]fr.Element, 2*(1<<bN))
+	fmt.Println(len(s.MIMCHintsInputs))
+	for i := range s.MIMCHintsInputs {
+		for j := range s.MIMCHintsInputs[i] {
+			inputs[0][j*2].SetBigInt(s.MIMCHintsInputs[i][j])
+			fmt.Println(j * 2)
+			fmt.Println("inputs", inputs[0][j*2].String())
+		}
+	}
+	assignment := nativeCircuit.Assign(inputs, 1)
+	outputs := assignment.Values[91]
+	fmt.Println("outputs", outputs[0][0].String())
+
+	prover := gkr.NewProver(nativeCircuit, assignment)
+	proofg := prover.Prove(1)
+	qInitialprime, _ := gkr.GetInitialQPrimeAndQ(bN, 0)
+
+	c := gkr_mimc.AllocateGKRMimcTestCircuit(bN)
+	c.Assign(proofg, inputs, outputs, qInitialprime)
+
+	w, err := witness.New(cs.CurveID(), nil)
+	if err != nil {
+		panic(err)
+	}
+
+	tVariable := reflect.ValueOf(struct{ A frontend.Variable }{}).FieldByName("A").Type()
+	w.Schema, err = w.Vector.FromAssignment(&c, tVariable, false)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(w.Vector.Len())
+
+	witnessToSolution := *w.Vector.(*bn254witness.Witness)
+	for i := s.InitialValuesLength - w.Vector.Len(); i < s.InitialValuesLength; i++ {
+		s.values[i] = witnessToSolution[i-s.InitialValuesLength+w.Vector.Len()]
+	}
 }
 
 // IsSolved returns nil if given witness solves the R1CS and error otherwise

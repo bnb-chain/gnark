@@ -27,6 +27,9 @@ type R1CS struct {
 	LazyConsMap            map[int]LazyIndexedInputs
 	LazyConsStaticR1CMap   map[string][]R1C
 	LazyConsOriginInputMap map[string]LazyInputs
+	MIMCHints              []int
+	GKRConstraintsPos      int
+	GKRConstraintsLvl      int // record the lvl
 }
 
 // GetNbConstraints returns the number of constraints

@@ -569,6 +569,10 @@ func (e *engine) AddLazyPoseidon(v frontend.Variable, s ...frontend.Variable) {
 	// Not implemented
 }
 
+func (e *engine) AddGKRInputsAndOutputsMarks(inputs []frontend.Variable, outputs []frontend.Variable) {
+	// Not implemented
+}
+
 func (e *engine) AddInternalVariableWithLazy(lazyCnt int) frontend.Variable {
 	// Not implemented
 	return compiled.LinearExpression{

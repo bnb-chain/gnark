@@ -270,6 +270,7 @@ func (assert *Assert) solvingSucceeded(circuit frontend.Circuit, validAssignment
 
 	// 1- compile the circuit
 	ccs, err := assert.compile(circuit, curve, b, opt.compileOpts)
+	fmt.Println("ccs len", len(ccs.GetConstraints()))
 	checkError(err)
 
 	// must not error with big int test engine

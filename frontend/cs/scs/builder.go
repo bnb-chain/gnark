@@ -90,6 +90,10 @@ func (system *scs) AddLazyPoseidon(v frontend.Variable, s ...frontend.Variable) 
 	// not implemented
 }
 
+func (system *scs) AddGKRInputsAndOutputsMarks(inputs []frontend.Variable, outputs []frontend.Variable) {
+	// not implemented
+}
+
 func (system *scs) AddInternalVariableWithLazy(lazyCnt int) frontend.Variable {
 	idx := system.NbInternalVariables + system.NbPublicVariables + system.NbSecretVariables
 	return compiled.LinearExpression{

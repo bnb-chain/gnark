@@ -163,4 +163,6 @@ type API interface {
 	AddLazyMimcEnc(s, h, v Variable)
 
 	AddLazyPoseidon(v Variable, s ...Variable)
+
+	AddGKRInputsAndOutputsMarks(inputs []Variable, outputs []Variable)
 }

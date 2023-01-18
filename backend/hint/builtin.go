@@ -1,6 +1,8 @@
 package hint
 
 import (
+	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
+	"github.com/consensys/gnark/std/gkr/hash"
 	"math/big"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -9,6 +11,7 @@ import (
 func init() {
 	Register(IsZero)
 	Register(Self)
+	Register(MIMC2Elements)
 }
 
 // IsZero computes the value 1 - a^(modulus-1) for the single input a. This
@@ -37,5 +40,16 @@ func IsZero(curveID ecc.ID, inputs []*big.Int, results []*big.Int) error {
 
 func Self(curveID ecc.ID, inputs []*big.Int, results []*big.Int) error {
 	results[0].Set(inputs[0])
+	return nil
+}
+
+func MIMC2Elements(curveID ecc.ID, inputs []*big.Int, results []*big.Int) error {
+	newState := new(fr.Element).SetBigInt(inputs[1])
+	block := new(fr.Element).SetBigInt(inputs[0])
+	oldState := new(fr.Element).SetBigInt(inputs[1])
+	block.Sub(block, oldState)
+	hash.MimcPermutationInPlace(newState, *block)
+	bytes := newState.Bytes()
+	results[0].SetBytes(bytes[:])
 	return nil
 }
