@@ -91,10 +91,13 @@ func (builder *builder) AssertIsLessOrEqual(_v frontend.Variable, bound frontend
 			panic(fmt.Sprintf("AssertIsLessOrEqual: %s > %s", bv.String(), bb.String()))
 		}
 	}
+
+	nbBits := builder.cs.FieldBitLen()
+	vBits := bits.ToBinary(builder, _v, bits.WithNbDigits(nbBits), bits.WithUnconstrainedOutputs())
+
 	// bound is constant
 	if bConst {
-		vv := builder.toVariable(_v)
-		builder.mustBeLessOrEqCst(vv, *builder.cs.ToBigInt(&cb))
+		builder.MustBeLessOrEqCst(vBits, builder.cs.ToBigInt(&cb), _v)
 		return
 	}
 	builder.mustBeLessOrEqVar(_v, bound)
@@ -154,9 +157,19 @@ func (builder *builder) mustBeLessOrEqVar(a, bound frontend.Variable) {
 
 }
 
-func (builder *builder) mustBeLessOrEqCst(a expr.LinearExpression, bound big.Int) {
+// MustBeLessOrEqCst asserts that value represented using its bit decomposition
+// aBits is less or equal than constant bound. The method boolean constraints
+// the bits in aBits, so the caller can provide unconstrained bits.
+func (builder *builder) MustBeLessOrEqCst(aBits []frontend.Variable, bound *big.Int, aForDebug frontend.Variable) {
 
 	nbBits := builder.cs.FieldBitLen()
+
+	if len(aBits) > nbBits {
+		panic("more input bits than field bit length")
+	}
+	for i := len(aBits); i < nbBits; i++ {
+		aBits = append(aBits, 0)
+	}
 
 	// ensure the bound is positive, it's bit-len doesn't matter
 	if bound.Sign() == -1 {
@@ -167,11 +180,7 @@ func (builder *builder) mustBeLessOrEqCst(a expr.LinearExpression, bound big.Int
 	}
 
 	// debug info
-	debug := builder.newDebugInfo("mustBeLessOrEq", a, " <= ", builder.toVariable(bound))
-
-	// note that at this stage, we didn't boolean-constraint these new variables yet
-	// (as opposed to ToBinary)
-	aBits := bits.ToBinary(builder, a, bits.WithNbDigits(nbBits), bits.WithUnconstrainedOutputs())
+	debug := builder.newDebugInfo("mustBeLessOrEq", aForDebug, " <= ", builder.toVariable(bound))
 
 	// t trailing bits in the bound
 	t := 0
