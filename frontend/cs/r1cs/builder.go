@@ -450,24 +450,22 @@ func (builder *builder) compress(le expr.LinearExpression) expr.LinearExpression
 	return t
 }
 
-func (builder *builder) RecordConstraintsForLazy(key string, finished bool, s *[]frontend.Variable) {
+func (builder *builder) StartRecordConstraintsForLazy(key string, s *[]frontend.Variable) {
 	log := logger.Logger()
 	if _, exists := constraint.LazyInputsFactoryMap[key]; !exists {
 		// not register, continue
-		return
+		panic("the lazy factory function is not registered")
 	}
 	expressions, _ := builder.toVariables(*s...)
 	// we are not using constant value because this will change repeatable called function generated constraints structure
-	if !finished {
-		for i := range expressions {
-			if _, constant := builder.constantValue(expressions[i]); constant {
-				one := builder.cstOne()
-				t := builder.newInternalVariable()
-				builder.cs.AddConstraint(builder.newR1C(expressions[i], one, t))
-				expressions[i] = t
-				(*s)[i] = expressions[i]
-				log.Warn().Msg("detect constant variables in lazy, will be converted to internal variables")
-			}
+	for i := range expressions {
+		if _, constant := builder.constantValue(expressions[i]); constant {
+			one := builder.cstOne()
+			t := builder.newInternalVariable()
+			builder.cs.AddConstraint(builder.newR1C(expressions[i], one, t))
+			expressions[i] = t
+			(*s)[i] = expressions[i]
+			log.Warn().Msg("detect constant variables in lazy, will be converted to internal variables")
 		}
 	}
 
@@ -475,7 +473,20 @@ func (builder *builder) RecordConstraintsForLazy(key string, finished bool, s *[
 	for i := range constraintExpressions {
 		constraintExpressions[i] = builder.getLinearExpression(expressions[i])
 	}
-	builder.cs.AddStaticConstraints(key, builder.cs.GetNbConstraints(), finished, constraintExpressions)
+	builder.cs.StartAddStaticConstraints(key, builder.cs.GetNbConstraints(), constraintExpressions)
+}
+
+func (builder *builder) EndRecordConstraintsForLazy(key string, s *[]frontend.Variable) {
+	if _, exists := constraint.LazyInputsFactoryMap[key]; !exists {
+		// not register, continue
+		panic("the lazy factory function is not registered")
+	}
+	expressions, _ := builder.toVariables(*s...)
+	constraintExpressions := make([]constraint.LinearExpression, len(expressions))
+	for i := range constraintExpressions {
+		constraintExpressions[i] = builder.getLinearExpression(expressions[i])
+	}
+	builder.cs.EndAddStaticConstraints(key, builder.cs.GetNbConstraints(), constraintExpressions)
 }
 
 func (builder *builder) AddGKRInputsAndOutputsMarks(inputs []frontend.Variable, outputs []frontend.Variable, initialHash frontend.Variable) {

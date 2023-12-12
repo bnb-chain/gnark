@@ -8,11 +8,11 @@ type GeneralLazyInputs struct {
 	// record the start location constraint
 	Loc int
 
-	// record the Shift from the static constraint
+	// record the shift from the static constraint
 	Shift int
 
-	// record the ParamsNum to differ
-	ParamsNum int
+	// record the VariablesNum to differ
+	VariablesNum int
 
 	// reusing the constraints related to inputs
 	InputConstraints []constraint.R1C
@@ -33,10 +33,13 @@ func (le *GeneralLazyInputs) GetLoc() int {
 }
 
 func (le *GeneralLazyInputs) FetchLazy(r1cs constraint.R1CS, j int) constraint.R1C {
-	staticR1cs := r1cs.GetStaticConstraints(le.Key).StaticR1CS
-
 	if j < len(le.InputConstraints) {
 		return le.InputConstraints[j]
+	}
+
+	staticR1cs := r1cs.GetStaticConstraints(le.Key).StaticR1CS
+	if len(staticR1cs) <= j {
+		panic("can not get staticR1cs, you should check if lazy index record correctly")
 	}
 
 	resL := addShiftToTermsForExpression(staticR1cs[j].L, le.Shift)
@@ -62,10 +65,10 @@ func addShiftToTermsForExpression(expression constraint.LinearExpression, shift 
 }
 
 func createGeneralLazyInputsFunc(key string) func(inputs []constraint.R1C, loc int, constraintsNum int, paramsNum int, shift int) constraint.LazyInputs {
-	return func(inputs []constraint.R1C, loc int, constraintsNum int, paramsNum int, shift int) constraint.LazyInputs {
+	return func(inputs []constraint.R1C, loc int, constraintsNum int, variablesNum int, shift int) constraint.LazyInputs {
 		return &GeneralLazyInputs{
 			InputConstraints: inputs,
-			ParamsNum:        paramsNum,
+			VariablesNum:     variablesNum,
 			Loc:              loc,
 			ConstraintsNum:   constraintsNum,
 			Key:              key,

@@ -52,6 +52,7 @@ func (cs *SparseR1CSCore) UpdateLevel(cID int, c Iterable) {
 }
 
 func (cs *SparseR1CSCore) Lazify() map[int]int {
+	// lazy evaluation is not implemented for sparse R1CS
 	return nil
 }
 

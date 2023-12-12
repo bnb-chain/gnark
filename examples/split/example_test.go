@@ -1,4 +1,4 @@
-package splitted
+package split
 
 import (
 	"fmt"

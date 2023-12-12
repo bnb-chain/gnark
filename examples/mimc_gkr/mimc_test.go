@@ -39,6 +39,7 @@ func TestPreimage(t *testing.T) {
 	circuit.GKRs.AllocateGKRCircuit(bN)
 	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit, frontend.IgnoreUnconstrainedInputs(), frontend.WithGKRBN(bN))
 	assert.NoError(err)
+	ccs.Lazify()
 
 	pk, vk, err := groth16.Setup(ccs)
 	assert.NoError(err)

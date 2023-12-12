@@ -37,7 +37,9 @@ type R1CS interface {
 	// ! this is an experimental API.
 	GetConstraints() ([]R1C, Resolver)
 
-	AddStaticConstraints(key string, constraintPos int, finished bool, expressions []LinearExpression)
+	StartAddStaticConstraints(key string, constraintPos int, expressions []LinearExpression)
+
+	EndAddStaticConstraints(key string, constraintPos int, expressions []LinearExpression)
 
 	GetStaticConstraints(key string) StaticConstraints
 

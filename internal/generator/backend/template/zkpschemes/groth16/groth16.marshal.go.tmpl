@@ -299,15 +299,19 @@ func (pk *ProvingKey) WriteRawCommitmentKeyTo(w io.Writer) (n int64, err error) 
 func (pk *ProvingKey) WriteRawATo(w io.Writer) (n int64, err error) {
 	return pk.writeATo(w)
 }
+
 func (pk *ProvingKey) WriteRawB1To(w io.Writer) (n int64, err error) {
 	return pk.writeB1To(w)
 }
+
 func (pk *ProvingKey) WriteRawB2To(w io.Writer) (n int64, err error) {
 	return pk.writeB2To(w)
 }
+
 func (pk *ProvingKey) WriteRawZTo(w io.Writer) (n int64, err error) {
 	return pk.writeZTo(w)
 }
+
 func (pk *ProvingKey) WriteRawKTo(w io.Writer) (n int64, err error) {
 	return pk.writeKTo(w)
 }

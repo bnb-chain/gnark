@@ -128,11 +128,15 @@ type API interface {
 	// Deprecated: use api.Compiler().ConstantValue() instead
 	ConstantValue(v Variable) (*big.Int, bool)
 
-	// RecordConstraintsForLazy a decorator function to record repeatable structure
+	// StartRecordConstraintsForLazy a decorator function to record repeatable structure
 	// @params key is the key for the repeatable structure
-	// @params finished will appear in couple around the repeatable structure, first false, then true
 	// @Params s is the inputs and same order with the repeatable structure
-	RecordConstraintsForLazy(key string, finished bool, s *[]Variable)
+	StartRecordConstraintsForLazy(key string, s *[]Variable)
+
+	// EndRecordConstraintsForLazy a decorator function to record repeatable structure
+	// @params key is the key for the repeatable structure
+	// @Params s is the inputs and same order with the repeatable structure
+	EndRecordConstraintsForLazy(key string, s *[]Variable)
 
 	AddGKRInputsAndOutputsMarks(inputs []Variable, outputs []Variable, initialHash Variable)
 }

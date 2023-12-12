@@ -66,10 +66,13 @@ type ConstraintSystem interface {
 	// debug information only once.
 	AttachDebugInfo(debugInfo DebugInfo, constraintID []int)
 
-	// CheckUnconstrainedWires returns and error if the constraint system has wires that are not uniquely constrained.
+	// CheckUnconstrainedWires returns an error if the constraint system has wires that are not uniquely constrained.
 	// This is experimental.
 	CheckUnconstrainedWires() error
 
+	// Lazify updates the constraint system by removing all the constraints captured by the lazy evaluation
+	// and storing a compressed form separately. It returns the remapping from the old constraint indices to the new ones.
+	// will return nil if no changes made to update levels
 	Lazify() map[int]int
 	GetNbR1C() int
 

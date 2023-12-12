@@ -17,7 +17,7 @@ func GetLazyPoseidonKey(params int) string {
 }
 
 func RegisterPoseidonFactory() error {
-	for i := 3; i <= 13; i++ {
+	for i := 1; i <= 17; i++ {
 		key := GetLazyPoseidonKey(i)
 		constraint.Register(key, createGeneralLazyInputsFunc(key))
 	}

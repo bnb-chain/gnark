@@ -490,7 +490,12 @@ func (e *engine) ConstantValue(v frontend.Variable) (*big.Int, bool) {
 	return r, e.constVars
 }
 
-func (e *engine) RecordConstraintsForLazy(key string, finished bool, s *[]frontend.Variable) {
+func (e *engine) StartRecordConstraintsForLazy(key string, s *[]frontend.Variable) {
+	// lazy evaluation is not implemented for the test engine
+}
+
+func (e *engine) EndRecordConstraintsForLazy(key string, s *[]frontend.Variable) {
+	// lazy evaluation is not implemented for the test engine
 }
 
 func (e *engine) AddGKRInputsAndOutputsMarks(inputs []frontend.Variable, outputs []frontend.Variable, initialHash frontend.Variable) {
