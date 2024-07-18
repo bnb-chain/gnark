@@ -213,6 +213,6 @@ func (builder *scs) mustBeLessOrEqCst(a expr.TermToRefactor, bound big.Int) {
 
 }
 
-func (builder *scs) AssertIsLessOrEqualNOp(_v frontend.Variable, bound frontend.Variable, maxBits int) {
+func (builder *scs) AssertIsLessOrEqualNOp(_v frontend.Variable, bound frontend.Variable, maxBits int, omitRangeCheck ...bool) {
 	panic("not implemented")
 }

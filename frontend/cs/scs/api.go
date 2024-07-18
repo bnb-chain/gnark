@@ -503,6 +503,6 @@ func (builder *scs) Compiler() frontend.Compiler {
 	return builder
 }
 
-func (builder *scs) CmpNOp(i1, i2 frontend.Variable, maxBits int) frontend.Variable {
+func (builder *scs) CmpNOp(i1, i2 frontend.Variable, maxBits int, omitRangeCheck ...bool) frontend.Variable {
 	panic("not implemented")
 }
