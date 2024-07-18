@@ -95,6 +95,8 @@ type API interface {
 
 	// Cmp returns 1 if i1>i2, 0 if i1=i2, -1 if i1<i2
 	Cmp(i1, i2 Variable) Variable
+	// Optimized version of Cmp for the case where i1 and i2 are variables less than 2^maxBits
+	CmpNOp(i1, i2 Variable, maxBits int, omitRangeCheck ...bool) Variable
 
 	// ---------------------------------------------------------------------------------------------
 	// Assertions
@@ -110,6 +112,8 @@ type API interface {
 
 	// AssertIsLessOrEqual fails if  v > bound
 	AssertIsLessOrEqual(v Variable, bound Variable)
+	// Optimized version of AssertIsLessOrEqual for the case where v and bound are variables less than 2^maxBits
+	AssertIsLessOrEqualNOp(v, bound Variable, maxBits int, omitRangeCheck ...bool)
 
 	// Println behaves like fmt.Println but accepts cd.Variable as parameter
 	// whose value will be resolved at runtime when computed by the solver
@@ -127,4 +131,16 @@ type API interface {
 	// ConstantValue is a shortcut to api.Compiler().ConstantValue()
 	// Deprecated: use api.Compiler().ConstantValue() instead
 	ConstantValue(v Variable) (*big.Int, bool)
+
+	// StartRecordConstraintsForLazy a decorator function to record repeatable structure
+	// @params key is the key for the repeatable structure
+	// @Params s is the inputs and same order with the repeatable structure
+	StartRecordConstraintsForLazy(key string, s *[]Variable)
+
+	// EndRecordConstraintsForLazy a decorator function to record repeatable structure
+	// @params key is the key for the repeatable structure
+	// @Params s is the inputs and same order with the repeatable structure
+	EndRecordConstraintsForLazy(key string, s *[]Variable)
+
+	AddGKRInputsAndOutputsMarks(inputs []Variable, outputs []Variable, initialHash Variable)
 }

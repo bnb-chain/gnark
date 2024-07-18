@@ -39,18 +39,32 @@ type solution struct {
 	nbSolved             uint64
 	mHintsFunctions      map[hint.ID]hint.Function // maps hintID to hint function
 	mHints               map[int]*constraint.Hint  // maps wireID to hint
+	indexedHintWires     [][]int
+	indexedHintInputs    [][]constraint.LinearExpression
 	st                   *debug.SymbolTable
+	MIMCHints            map[int]int  // maps to tell if the hints is mimc
+	MIMCHintsInputs      [][]*big.Int // every mimc hints has two inputs
+	InitialValuesLength  int
 }
 
-func newSolution(nbWires int, hintFunctions map[hint.ID]hint.Function, hintsDependencies map[hint.ID]string, mHints map[int]*constraint.Hint, coefficients []fr.Element, st *debug.SymbolTable) (solution, error) {
+func newSolution(nbWires int, hintFunctions map[hint.ID]hint.Function, hintsDependencies map[hint.ID]string, mHints map[int]*constraint.Hint, indexedHintWires [][]int, indexedHintInputs [][]constraint.LinearExpression, coefficients []fr.Element, st *debug.SymbolTable, MIMCHints []int) (solution, error) {
+
+	mimcHintsMap := make(map[int]int)
+	for id, vId := range MIMCHints {
+		mimcHintsMap[vId] = id
+	}
 
 	s := solution{
-		st:              st,
-		values:          make([]fr.Element, nbWires),
-		coefficients:    coefficients,
-		solved:          make([]bool, nbWires),
-		mHintsFunctions: hintFunctions,
-		mHints:          mHints,
+		st:                st,
+		values:            make([]fr.Element, nbWires),
+		coefficients:      coefficients,
+		solved:            make([]bool, nbWires),
+		mHintsFunctions:   hintFunctions,
+		mHints:            mHints,
+		MIMCHints:         mimcHintsMap,
+		MIMCHintsInputs:   make([][]*big.Int, len(MIMCHints)),
+		indexedHintWires:  indexedHintWires,
+		indexedHintInputs: indexedHintInputs,
 	}
 
 	// hintsDependencies is from compile time; it contains the list of hints the solver **needs**
@@ -152,8 +166,10 @@ func (s *solution) solveWithHint(vID int, h *constraint.Hint) error {
 	}
 
 	// tmp IO big int memory
-	nbInputs := len(h.Inputs)
-	nbOutputs := len(h.Wires)
+	hInputs := s.indexedHintInputs[h.InputsIdx]
+	nbInputs := len(hInputs)
+	hWires := s.indexedHintWires[h.WiresIdx]
+	nbOutputs := len(hWires)
 	inputs := make([]*big.Int, nbInputs)
 	outputs := make([]*big.Int, nbOutputs)
 	for i := 0; i < nbOutputs; i++ {
@@ -189,7 +205,7 @@ func (s *solution) solveWithHint(vID int, h *constraint.Hint) error {
 		inputs[i] = big.NewInt(0)
 
 		var v fr.Element
-		for _, term := range h.Inputs[i] {
+		for _, term := range hInputs[i] {
 			if err := recursiveSolve(term); err != nil {
 				return err
 			}
@@ -198,12 +214,16 @@ func (s *solution) solveWithHint(vID int, h *constraint.Hint) error {
 		v.BigInt(inputs[i])
 	}
 
+	if id, exists := s.MIMCHints[vID]; exists {
+		s.MIMCHintsInputs[id] = inputs
+	}
+
 	err := f(q, inputs, outputs)
 
 	var v fr.Element
 	for i := range outputs {
 		v.SetBigInt(outputs[i])
-		s.set(h.Wires[i], v)
+		s.set(hWires[i], v)
 	}
 
 	return err

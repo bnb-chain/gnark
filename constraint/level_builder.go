@@ -21,6 +21,20 @@ func (system *System) updateLevel(cID int, c Iterable) {
 	// level =  max(dependencies) + 1
 	level++
 
+	if cID >= system.GKRMeta.GKRConstraintsPos && system.GKRMeta.GKRConstraintsPos != 0 {
+		if tolevel, transfer := system.gkrTransferMap[level]; transfer {
+			level = tolevel
+		} else {
+			// add a new level
+			system.gkrTransferMap[level] = len(system.Levels)
+			level = len(system.Levels)
+		}
+	}
+	// create new levels for gkr constraints, and other gkr constraints will base on this levels
+	if cID == system.GKRMeta.GKRConstraintsPos && system.GKRMeta.GKRConstraintsPos != 0 && system.GKRMeta.GKRConstraintsLvl == 0 {
+		system.GKRMeta.GKRConstraintsLvl = level
+	}
+
 	// mark output wire with level
 	for _, wireID := range system.lbOutputs {
 		for int(wireID) >= len(system.lbWireLevel) {
@@ -65,10 +79,12 @@ func (system *System) processWire(wireID uint32, maxLevel *int) {
 		}
 		system.lbHints[h] = struct{}{}
 
-		for _, hwid := range h.Wires {
+		hWires := system.IndexedWires[h.WiresIdx]
+		for _, hwid := range hWires {
 			system.lbOutputs = append(system.lbOutputs, uint32(hwid))
 		}
-		for _, in := range h.Inputs {
+		hInputs := system.IndexedInputs[h.InputsIdx]
+		for _, in := range hInputs {
 			for _, t := range in {
 				if !t.IsConstant() {
 					system.processWire(t.VID, maxLevel)

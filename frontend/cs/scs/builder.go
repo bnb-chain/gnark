@@ -248,6 +248,17 @@ func (builder *scs) ConstantValue(v frontend.Variable) (*big.Int, bool) {
 	}
 }
 
+func (builder *scs) StartRecordConstraintsForLazy(key string, s *[]frontend.Variable) {
+	// lazy evaluation is not implemented for the test engine
+}
+
+func (builder *scs) EndRecordConstraintsForLazy(key string, s *[]frontend.Variable) {
+	// lazy evaluation is not implemented for the test engine
+}
+
+func (builder *scs) AddGKRInputsAndOutputsMarks(inputs []frontend.Variable, outputs []frontend.Variable, initialHash frontend.Variable) {
+}
+
 func (builder *scs) TOREFACTORMakeTerm(c *big.Int, vID int) constraint.Term {
 	cc := builder.cs.FromInterface(c)
 	return builder.cs.MakeTerm(&cc, vID)

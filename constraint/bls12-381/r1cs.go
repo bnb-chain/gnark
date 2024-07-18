@@ -17,10 +17,15 @@
 package cs
 
 import (
+	"bufio"
+	"encoding/gob"
 	"errors"
 	"fmt"
+	"github.com/consensys/gnark/constraint/lazy"
 	"github.com/fxamacker/cbor/v2"
 	"io"
+	"os"
+	"reflect"
 	"runtime"
 	"sync"
 	"time"
@@ -45,14 +50,23 @@ type R1CS struct {
 	arithEngine
 }
 
+var GKRWitnessGeneratorHandler func(id ecc.ID, inputs [][]fr.Element, bN, batchSize, initialLength int, initialHash *fr.Element) (values []fr.Element, startLength, endLength int)
+
+func RegisterGKRWitnessGeneratorHandler(f func(id ecc.ID, inputs [][]fr.Element, bN, batchSize, initialLength int, initialHash *fr.Element) (values []fr.Element, startLength, endLength int)) {
+	GKRWitnessGeneratorHandler = f
+}
+
 // NewR1CS returns a new R1CS and sets cs.Coefficient (fr.Element) from provided big.Int values
 //
 // capacity pre-allocates memory for capacity nbConstraints
 func NewR1CS(capacity int) *R1CS {
 	r := R1CS{
 		R1CSCore: constraint.R1CSCore{
-			System:      constraint.NewSystem(fr.Modulus()),
-			Constraints: make([]constraint.R1C, 0, capacity),
+			System:            constraint.NewSystem(fr.Modulus()),
+			Constraints:       make([]constraint.R1C, 0, capacity),
+			LazyCons:          make([]constraint.LazyInputs, 0),
+			LazyConsMap:       make(map[int]constraint.LazyIndexedInputs),
+			StaticConstraints: make(map[string]constraint.StaticConstraints),
 		},
 		CoeffTable: newCoeffTable(capacity / 10),
 	}
@@ -73,6 +87,133 @@ func (cs *R1CS) AddConstraint(r1c constraint.R1C, debugInfo ...constraint.DebugI
 	return cID
 }
 
+func (cs *R1CS) StartAddStaticConstraints(key string, constraintPos int, expressions []constraint.LinearExpression) {
+	if c, exists := cs.StaticConstraints[key]; !exists || c.StaticR1CS == nil {
+		// first time enter without any static constraint recorded
+		cs.StaticConstraints[key] = constraint.StaticConstraints{StaticR1CS: nil, Begin: constraintPos, InputLinearExpressions: &expressions}
+	}
+}
+
+func (cs *R1CS) EndAddStaticConstraints(key string, constraintPos int, expressions []constraint.LinearExpression) {
+	nbVariables := cs.GetNbSecretVariables() + cs.GetNbPublicVariables() + cs.GetNbInternalVariables()
+	if c, exists := cs.StaticConstraints[key]; !exists || c.StaticR1CS == nil {
+		// first time enter without any static constraint recorded
+		// for the first one counting the input threshold
+		inputConstraintsThreshold := constraint.ComputeInputConstraintsThreshold(cs.Constraints[cs.StaticConstraints[key].Begin:constraintPos], cs.StaticConstraints[key].InputLinearExpressions)
+		cs.StaticConstraints[key] = constraint.StaticConstraints{StaticR1CS: cs.Constraints[cs.StaticConstraints[key].Begin:constraintPos], Begin: c.Begin, End: constraintPos, InputConstraintsThreshold: inputConstraintsThreshold, NbVariables: nbVariables}
+	}
+	count := len(cs.StaticConstraints[key].StaticR1CS)
+	inputConstraintCount := cs.StaticConstraints[key].InputConstraintsThreshold
+	// constraintPos - count is the start constraint of the inputs
+	inputConstraints := make([]constraint.R1C, inputConstraintCount)
+	copy(inputConstraints, cs.Constraints[constraintPos-count:constraintPos-count+inputConstraintCount])
+	shift := nbVariables - cs.StaticConstraints[key].NbVariables
+	input := constraint.NewLazyInputs(key, inputConstraints, constraintPos-count, count, len(expressions), shift)
+	cs.LazyCons = append(cs.LazyCons, input)
+}
+
+func (cs *R1CS) GetStaticConstraints(key string) constraint.StaticConstraints {
+	return cs.StaticConstraints[key]
+}
+
+func (cs *R1CS) FinalizeGKR() {
+	// adding constraint for gkr inputs / gkr outputs
+	one := cs.One()
+	for i := range cs.GKRMeta.MIMCHints {
+		h := *cs.MHints[cs.GKRMeta.MIMCHints[i]]
+
+		hInputVids := cs.IndexedInputs[h.InputsIdx]
+		hWires := cs.IndexedWires[h.WiresIdx]
+		hOutputVid := constraint.LinearExpression{cs.MakeTerm(&one, hWires[0])}
+		cstone := constraint.LinearExpression{cs.MakeTerm(&one, 0)}
+		// 1 << bN is the total hashes size and shift of two inputs
+		shift := 1 << cs.GKRMeta.GKRBN
+		li0 := cs.GKRMeta.GKRInputTables[i]
+		li1 := cs.GKRMeta.GKRInputTables[i+shift]
+		// input constraint
+		cs.AddConstraint(constraint.R1C{L: cstone, R: hInputVids[0].Clone(), O: li0.Clone()})
+		cs.AddConstraint(constraint.R1C{L: cstone, R: hInputVids[1].Clone(), O: li1.Clone()})
+
+		// we need to contraints from inputs to outpus
+		for shiftI := 1; shiftI < 7; shiftI++ {
+			li2l := cs.GKRMeta.GKRInputTables[i+2*shiftI*shift]
+			lo2 := cs.GKRMeta.GKROutputTables[i+(shiftI-1)*shift]
+			cs.AddConstraint(constraint.R1C{L: cstone, R: lo2.Clone(), O: li2l.Clone()})
+
+			li2r := cs.GKRMeta.GKRInputTables[i+2*shiftI*shift+shift]
+			cs.AddConstraint(constraint.R1C{L: cstone, R: li1.Clone(), O: li2r.Clone()})
+		}
+
+		lo := cs.GKRMeta.GKROutputTables[i+shift*6]
+		// output constraint
+		cs.AddConstraint(constraint.R1C{L: cstone, R: hOutputVid.Clone(), O: lo.Clone()})
+	}
+}
+
+func (cs *R1CS) Lazify() map[int]int {
+	// already lazify
+	if len(cs.LazyConsMap) != 0 {
+		return nil
+	}
+
+	// remove cons generated from Lazy
+	mapFromFull := make(map[int]int)
+	lastEnd := 0
+	offset := 0
+	bar := len(cs.Constraints) - cs.LazyCons.GetConstraintsAll()
+	ret := make([]constraint.R1C, 0)
+
+	lazyR1CIdx := 0
+	for lazyIndex, con := range cs.LazyCons {
+		start := con.GetLoc()
+		end := con.GetLoc() + con.GetConstraintsNum()
+		if start > lastEnd {
+			ret = append(ret, cs.Constraints[lastEnd:start]...)
+		}
+
+		// map [lastend, start)
+		for j := lastEnd; j < start; j++ {
+			mapFromFull[j] = j - offset
+		}
+		lastEnd = end
+		// map [start, end)
+		for j := start; j < end; j++ {
+			mapFromFull[j] = bar + offset + (j - start)
+		}
+
+		// record the index to cons
+		for i := 0; i < con.GetConstraintsNum(); i++ {
+			cs.LazyConsMap[bar+lazyR1CIdx] = constraint.LazyIndexedInputs{Index: i, LazyIndex: lazyIndex}
+			lazyR1CIdx++
+		}
+
+		offset += con.GetConstraintsNum()
+	}
+	if lastEnd < len(cs.Constraints) {
+		ret = append(ret, cs.Constraints[lastEnd:]...)
+	}
+	// map [end, endCons)
+	nbCons := len(cs.Constraints)
+	for j := lastEnd; j < nbCons; j++ {
+		/// mapFromFull[j+offset] = j
+		mapFromFull[j] = j - offset
+	}
+	cs.Constraints = ret
+
+	for i, row := range cs.Levels {
+		for j, val := range row {
+
+			if v, ok := mapFromFull[val]; ok {
+				cs.Levels[i][j] = v
+			} else {
+				panic(fmt.Sprintf("bad map loc at %d, %d", i, j))
+			}
+		}
+	}
+
+	return mapFromFull
+}
+
 // Solve sets all the wires and returns the a, b, c vectors.
 // the cs system should have been compiled before. The entries in a, b, c are in Montgomery form.
 // a, b, c vectors: ab-c = hz
@@ -82,7 +223,7 @@ func (cs *R1CS) Solve(witness, a, b, c fr.Vector, opt backend.ProverConfig) (fr.
 	log := logger.Logger().With().Int("nbConstraints", len(cs.Constraints)).Str("backend", "groth16").Logger()
 
 	nbWires := len(cs.Public) + len(cs.Secret) + cs.NbInternalVariables
-	solution, err := newSolution(nbWires, opt.HintFunctions, cs.MHintsDependencies, cs.MHints, cs.Coefficients, &cs.System.SymbolTable)
+	solution, err := newSolution(nbWires, opt.HintFunctions, cs.MHintsDependencies, cs.MHints, cs.IndexedWires, cs.IndexedInputs, cs.Coefficients, &cs.System.SymbolTable, cs.GKRMeta.MIMCHints)
 	if err != nil {
 		return make(fr.Vector, nbWires), err
 	}
@@ -95,7 +236,7 @@ func (cs *R1CS) Solve(witness, a, b, c fr.Vector, opt backend.ProverConfig) (fr.
 	}
 
 	// compute the wires and the a, b, c polynomials
-	if len(a) != len(cs.Constraints) || len(b) != len(cs.Constraints) || len(c) != len(cs.Constraints) {
+	if len(a) != cs.GetNbConstraints() || len(b) != cs.GetNbConstraints() || len(c) != cs.GetNbConstraints() {
 		err = errors.New("invalid input size: len(a, b, c) == len(Constraints)")
 		log.Err(err).Send()
 		return solution.values, err
@@ -108,6 +249,7 @@ func (cs *R1CS) Solve(witness, a, b, c fr.Vector, opt backend.ProverConfig) (fr.
 		solution.solved[i+1] = true
 	}
 
+	solution.InitialValuesLength = len(witness) + 1
 	// keep track of the number of wire instantiations we do, for a sanity check to ensure
 	// we instantiated all wires
 	solution.nbSolved += uint64(len(witness) + 1)
@@ -161,8 +303,7 @@ func (cs *R1CS) parallelSolve(a, b, c fr.Vector, solution *solution) error {
 		go func() {
 			for t := range chTasks {
 				for _, i := range t {
-					// for each constraint in the task, solve it.
-					if err := cs.solveConstraint(cs.Constraints[i], solution, &a[i], &b[i], &c[i]); err != nil {
+					if err := cs.solveConstraint(cs.GetConstraintToSolve(i), solution, &a[i], &b[i], &c[i]); err != nil {
 						var debugInfo *string
 						if dID, ok := cs.MDebug[i]; ok {
 							debugInfo = new(string)
@@ -185,7 +326,11 @@ func (cs *R1CS) parallelSolve(a, b, c fr.Vector, solution *solution) error {
 	}()
 
 	// for each level, we push the tasks
-	for _, level := range cs.Levels {
+	for i, level := range cs.Levels {
+
+		if i == cs.GKRMeta.GKRConstraintsLvl {
+			cs.assignGKRProofs(solution)
+		}
 
 		// max CPU to use
 		maxCPU := float64(len(level)) / minWorkPerCPU
@@ -193,7 +338,7 @@ func (cs *R1CS) parallelSolve(a, b, c fr.Vector, solution *solution) error {
 		if maxCPU <= 1.0 {
 			// we do it sequentially
 			for _, i := range level {
-				if err := cs.solveConstraint(cs.Constraints[i], solution, &a[i], &b[i], &c[i]); err != nil {
+				if err := cs.solveConstraint(cs.GetConstraintToSolve(i), solution, &a[i], &b[i], &c[i]); err != nil {
 					var debugInfo *string
 					if dID, ok := cs.MDebug[i]; ok {
 						debugInfo = new(string)
@@ -249,6 +394,33 @@ func (cs *R1CS) parallelSolve(a, b, c fr.Vector, solution *solution) error {
 	return nil
 }
 
+func (cs *R1CS) assignGKRProofs(s *solution) {
+
+	// only works fo mimc hints
+	if len(s.MIMCHintsInputs) == 0 {
+		return
+	}
+	var bN = cs.GKRMeta.GKRBN
+	var shift = 1 << bN
+	var batchSize = 13
+	// Creates the assignments values
+	inputs := make([][]fr.Element, 1)
+	inputs[0] = make([]fr.Element, 2*(1<<bN))
+	inputsCovered := 0 // inputs
+	for i := range s.MIMCHintsInputs {
+		inputs[0][inputsCovered].SetBigInt(s.MIMCHintsInputs[i][0])
+		inputs[0][inputsCovered+shift].SetBigInt(s.MIMCHintsInputs[i][1])
+		inputsCovered++
+	}
+	initialHash := s.values[cs.GKRMeta.GKRInitialHashVID]
+
+	values, startLen, endLen := GKRWitnessGeneratorHandler(cs.CurveID(), inputs, bN, batchSize, s.InitialValuesLength, &initialHash)
+	copy(s.values[startLen:endLen], values)
+	// from here we are using gkr inputs
+	// inputs, batchSize, bN, initial_length
+	// returns fr.Elements, start_length
+}
+
 // IsSolved returns nil if given witness solves the R1CS and error otherwise
 // this method wraps cs.Solve() and allocates cs.Solve() inputs
 func (cs *R1CS) IsSolved(witness witness.Witness, opts ...backend.ProverOption) error {
@@ -257,9 +429,9 @@ func (cs *R1CS) IsSolved(witness witness.Witness, opts ...backend.ProverOption) 
 		return err
 	}
 
-	a := make(fr.Vector, len(cs.Constraints))
-	b := make(fr.Vector, len(cs.Constraints))
-	c := make(fr.Vector, len(cs.Constraints))
+	a := make(fr.Vector, cs.GetNbConstraints())
+	b := make(fr.Vector, cs.GetNbConstraints())
+	c := make(fr.Vector, cs.GetNbConstraints())
 	v := witness.Vector().(fr.Vector)
 	_, err = cs.Solve(v, a, b, c, opt)
 	return err
@@ -395,6 +567,19 @@ func (cs *R1CS) solveConstraint(r constraint.R1C, solution *solution, a, b, c *f
 	return nil
 }
 
+func (cs *R1CS) GetConstraintToSolve(i int) constraint.R1C {
+	// constraint to solve could be lazy constraint or normal constraint
+	var constraintToSolve constraint.R1C
+	// for each constraint in the task, solve it.
+	if lazyCons, exists := cs.LazyConsMap[i]; exists {
+		lazyConstraint := cs.LazyCons[lazyCons.LazyIndex]
+		constraintToSolve = lazyConstraint.FetchLazy(cs, lazyCons.Index)
+	} else {
+		constraintToSolve = cs.Constraints[i]
+	}
+	return constraintToSolve
+}
+
 // GetConstraints return the list of R1C and a coefficient resolver
 func (cs *R1CS) GetConstraints() ([]constraint.R1C, constraint.Resolver) {
 	return cs.Constraints, cs
@@ -410,10 +595,21 @@ func (cs *R1CS) CurveID() ecc.ID {
 	return ecc.BLS12_381
 }
 
+// add cbor tags to clarify lazy poseidon inputs
+func (cs *R1CS) inputsCBORTags() (cbor.TagSet, error) {
+	defTagOpts := cbor.TagOptions{EncTag: cbor.EncTagRequired, DecTag: cbor.DecTagRequired}
+	tags := cbor.NewTagSet()
+	if err := tags.Add(defTagOpts, reflect.TypeOf(lazy.GeneralLazyInputs{}), 25448); err != nil {
+		return nil, fmt.Errorf("new LE tag: %w", err)
+	}
+	return tags, nil
+}
+
 // WriteTo encodes R1CS into provided io.Writer using cbor
 func (cs *R1CS) WriteTo(w io.Writer) (int64, error) {
+	tags, err := cs.inputsCBORTags()
 	_w := ioutils.WriterCounter{W: w} // wraps writer to count the bytes written
-	enc, err := cbor.CoreDetEncOptions().EncMode()
+	enc, err := cbor.CoreDetEncOptions().EncModeWithTags(tags)
 	if err != nil {
 		return 0, err
 	}
@@ -426,10 +622,11 @@ func (cs *R1CS) WriteTo(w io.Writer) (int64, error) {
 
 // ReadFrom attempts to decode R1CS from io.Reader using cbor
 func (cs *R1CS) ReadFrom(r io.Reader) (int64, error) {
+	tags, err := cs.inputsCBORTags()
 	dm, err := cbor.DecOptions{
-		MaxArrayElements: 134217728,
-		MaxMapPairs:      134217728,
-	}.DecMode()
+		MaxArrayElements: 268435456,
+		MaxMapPairs:      268435456,
+	}.DecModeWithTags(tags)
 
 	if err != nil {
 		return 0, err
@@ -448,4 +645,447 @@ func (cs *R1CS) ReadFrom(r io.Reader) (int64, error) {
 	}
 
 	return int64(decoder.NumBytesRead()), nil
+}
+
+func (cs *R1CS) SplitDumpBinary(session string, batchSize int) error {
+	// E part
+	{
+		name := fmt.Sprintf("%s.r1cs.E11.save", session)
+		csFile, err := os.Create(name)
+		if err != nil {
+			return err
+		}
+		writer := bufio.NewWriter(csFile)
+		enc := gob.NewEncoder(writer)
+		err = enc.Encode(cs.R1CSCore.System.Levels)
+		if err != nil {
+			return err
+		}
+		err = writer.Flush()
+		if err != nil {
+			return err
+		}
+		cs.R1CSCore.System.Levels = nil
+
+		if len(cs.R1CSCore.System.HintFnWiresToIdx) > 0 {
+			runtime.GC()
+			name = fmt.Sprintf("%s.r1cs.E12.save", session)
+			csFile, err = os.Create(name)
+			if err != nil {
+				return err
+			}
+			writer = bufio.NewWriter(csFile)
+			enc = gob.NewEncoder(writer)
+			err = enc.Encode(cs.R1CSCore.System.HintFnWiresToIdx)
+			if err != nil {
+				return err
+			}
+			err = writer.Flush()
+			if err != nil {
+				return err
+			}
+			cs.R1CSCore.System.HintFnWiresToIdx = nil
+		}
+
+		if len(cs.R1CSCore.System.HintFnInputsToIdx) > 0 {
+			runtime.GC()
+			name = fmt.Sprintf("%s.r1cs.E13.save", session)
+			csFile, err = os.Create(name)
+			if err != nil {
+				return err
+			}
+			writer = bufio.NewWriter(csFile)
+			enc = gob.NewEncoder(writer)
+			err = enc.Encode(cs.R1CSCore.System.HintFnInputsToIdx)
+			if err != nil {
+				return err
+			}
+			err = writer.Flush()
+			if err != nil {
+				return err
+			}
+			cs.R1CSCore.System.HintFnInputsToIdx = nil
+		}
+
+		if len(cs.R1CSCore.System.IndexedWires) > 0 {
+			runtime.GC()
+			name = fmt.Sprintf("%s.r1cs.E14.save", session)
+			csFile, err = os.Create(name)
+			if err != nil {
+				return err
+			}
+			writer = bufio.NewWriter(csFile)
+			enc = gob.NewEncoder(writer)
+			err = enc.Encode(cs.R1CSCore.System.IndexedWires)
+			if err != nil {
+				return err
+			}
+			err = writer.Flush()
+			if err != nil {
+				return err
+			}
+			cs.R1CSCore.System.IndexedWires = nil
+		}
+
+		if len(cs.R1CSCore.System.IndexedInputs) > 0 {
+			runtime.GC()
+			name = fmt.Sprintf("%s.r1cs.E15.save", session)
+			csFile, err = os.Create(name)
+			if err != nil {
+				return err
+			}
+			writer = bufio.NewWriter(csFile)
+			enc = gob.NewEncoder(writer)
+			err = enc.Encode(cs.R1CSCore.System.IndexedInputs)
+			if err != nil {
+				return err
+			}
+			err = writer.Flush()
+			if err != nil {
+				return err
+			}
+			cs.R1CSCore.System.IndexedInputs = nil
+		}
+
+		runtime.GC()
+		name = fmt.Sprintf("%s.r1cs.E1.save", session)
+		csFile, err = os.Create(name)
+		if err != nil {
+			return err
+		}
+		writer = bufio.NewWriter(csFile)
+		enc = gob.NewEncoder(writer)
+		err = enc.Encode(cs.R1CSCore.System)
+		if err != nil {
+			return err
+		}
+		err = writer.Flush()
+		if err != nil {
+			return err
+		}
+		cs.R1CSCore.System = constraint.NewSystem(fr.Modulus())
+	}
+	{
+		cs2 := &R1CS{}
+		cs2.R1CSCore.System = constraint.NewSystem(fr.Modulus())
+		cs2.R1CSCore.LazyCons = cs.R1CSCore.LazyCons
+
+		name := fmt.Sprintf("%s.r1cs.E2.save", session)
+		csFile, err := os.Create(name)
+		if err != nil {
+			return err
+		}
+		_, err = cs2.WriteTo(csFile)
+		if err != nil {
+			return err
+		}
+		cs.R1CSCore.LazyCons = nil
+	}
+	{
+		cs2 := &R1CS{}
+		cs2.R1CSCore.System = constraint.NewSystem(fr.Modulus())
+		cs2.R1CSCore.LazyConsMap = cs.R1CSCore.LazyConsMap
+
+		name := fmt.Sprintf("%s.r1cs.E3.save", session)
+		csFile, err := os.Create(name)
+		if err != nil {
+			return err
+		}
+		_, err = cs2.WriteTo(csFile)
+		if err != nil {
+			return err
+		}
+		cs.R1CSCore.LazyConsMap = nil
+	}
+	{
+		cs2 := &R1CS{}
+		cs2.R1CSCore.System = constraint.NewSystem(fr.Modulus())
+		cs2.CoeffTable = cs.CoeffTable
+		cs2.R1CSCore.StaticConstraints = cs.R1CSCore.StaticConstraints
+
+		name := fmt.Sprintf("%s.r1cs.E4.save", session)
+		csFile, err := os.Create(name)
+		if err != nil {
+			return err
+		}
+		_, err = cs2.WriteTo(csFile)
+		if err != nil {
+			return err
+		}
+		cs.R1CSCore.StaticConstraints = nil
+	}
+
+	N := len(cs.R1CSCore.Constraints)
+	for i := 0; i < N; {
+		// dump R1C[i, min(i+batchSize, end)]
+		cs2 := &R1CS{}
+		iNew := i + batchSize
+		if iNew > N {
+			iNew = N
+		}
+		cs2.R1CSCore.Constraints = cs.R1CSCore.Constraints[i:iNew]
+		name := fmt.Sprintf("%s.r1cs.Cons.%d.%d.save", session, i, iNew)
+		csFile, err := os.Create(name)
+		if err != nil {
+			return err
+		}
+		writer := bufio.NewWriter(csFile)
+		enc := gob.NewEncoder(writer)
+		err = enc.Encode(cs2)
+		if err != nil {
+			return err
+		}
+		err = writer.Flush()
+		if err != nil {
+			return err
+		}
+
+		i = iNew
+	}
+
+	return nil
+}
+
+func (cs *R1CS) LoadFromSplitBinaryConcurrent(session string, N, batchSize, NCore int) {
+	cs.R1CSCore.Constraints = make([]constraint.R1C, N)
+
+	var wg sync.WaitGroup
+	chTasks := make(chan int, NCore)
+	// worker pool
+	for core := 0; core < NCore; core++ {
+		go func() {
+			for i := range chTasks {
+				// E part
+				if i == -11 {
+					cs2 := &R1CS{}
+
+					name := fmt.Sprintf("%s.r1cs.E11.save", session)
+					csFile, err := os.Open(name)
+					if err != nil {
+						panic(err)
+					}
+					reader := bufio.NewReader(csFile)
+					dec := gob.NewDecoder(reader)
+					err = dec.Decode(&cs2.R1CSCore.System.Levels)
+					if err != nil {
+						panic(err)
+					}
+					cs.R1CSCore.System.Levels = cs2.R1CSCore.System.Levels
+
+					wg.Done()
+				} else if i == -12 {
+					cs2 := &R1CS{}
+
+					name := fmt.Sprintf("%s.r1cs.E12.save", session)
+					if _, err := os.Stat(name); err != nil {
+						wg.Done()
+						continue
+					}
+					csFile, err := os.Open(name)
+					if err != nil {
+						panic(err)
+					}
+					reader := bufio.NewReader(csFile)
+					dec := gob.NewDecoder(reader)
+					err = dec.Decode(&cs2.R1CSCore.System.HintFnWiresToIdx)
+					if err != nil {
+						panic(err)
+					}
+					cs.R1CSCore.System.HintFnWiresToIdx = cs2.R1CSCore.System.HintFnWiresToIdx
+
+					wg.Done()
+				} else if i == -13 {
+					cs2 := &R1CS{}
+
+					name := fmt.Sprintf("%s.r1cs.E13.save", session)
+					if _, err := os.Stat(name); err != nil {
+						wg.Done()
+						continue
+					}
+					csFile, err := os.Open(name)
+					if err != nil {
+						panic(err)
+					}
+					reader := bufio.NewReader(csFile)
+					dec := gob.NewDecoder(reader)
+					err = dec.Decode(&cs2.R1CSCore.System.HintFnInputsToIdx)
+					if err != nil {
+						panic(err)
+					}
+					cs.R1CSCore.System.HintFnInputsToIdx = cs2.R1CSCore.System.HintFnInputsToIdx
+
+					wg.Done()
+				} else if i == -14 {
+					cs2 := &R1CS{}
+
+					name := fmt.Sprintf("%s.r1cs.E14.save", session)
+					if _, err := os.Stat(name); err != nil {
+						wg.Done()
+						continue
+					}
+					csFile, err := os.Open(name)
+					if err != nil {
+						panic(err)
+					}
+					reader := bufio.NewReader(csFile)
+					dec := gob.NewDecoder(reader)
+					err = dec.Decode(&cs2.R1CSCore.System.IndexedWires)
+					if err != nil {
+						panic(err)
+					}
+					cs.R1CSCore.System.IndexedWires = cs2.R1CSCore.System.IndexedWires
+
+					wg.Done()
+				} else if i == -15 {
+					cs2 := &R1CS{}
+
+					name := fmt.Sprintf("%s.r1cs.E15.save", session)
+					if _, err := os.Stat(name); err != nil {
+						wg.Done()
+						continue
+					}
+					csFile, err := os.Open(name)
+					if err != nil {
+						panic(err)
+					}
+					reader := bufio.NewReader(csFile)
+					dec := gob.NewDecoder(reader)
+					err = dec.Decode(&cs2.R1CSCore.System.IndexedInputs)
+					if err != nil {
+						panic(err)
+					}
+					cs.R1CSCore.System.IndexedInputs = cs2.R1CSCore.System.IndexedInputs
+
+					wg.Done()
+				} else if i == -1 {
+					cs2 := &R1CS{}
+
+					name := fmt.Sprintf("%s.r1cs.E1.save", session)
+					csFile, err := os.Open(name)
+					if err != nil {
+						panic(err)
+					}
+					reader := bufio.NewReader(csFile)
+					dec := gob.NewDecoder(reader)
+					err = dec.Decode(cs2)
+					if err != nil {
+						panic(err)
+					}
+
+					cs.R1CSCore.System.GnarkVersion = cs2.R1CSCore.System.GnarkVersion
+					cs.R1CSCore.System.ScalarField = cs2.R1CSCore.System.ScalarField
+					cs.R1CSCore.System.NbInternalVariables = cs2.R1CSCore.System.NbInternalVariables
+					cs.R1CSCore.System.Public = make([]string, len(cs2.R1CSCore.System.Public))
+					cs.R1CSCore.System.Secret = make([]string, len(cs2.R1CSCore.System.Secret))
+					if _, ok := os.LookupEnv("GNARK_DEBUG_INFO"); ok {
+						cs.R1CSCore.System.Public = cs2.R1CSCore.System.Public
+						cs.R1CSCore.System.Secret = cs2.R1CSCore.System.Secret
+						cs.R1CSCore.System.Logs = cs2.R1CSCore.System.Logs
+						cs.R1CSCore.System.DebugInfo = cs2.R1CSCore.System.DebugInfo
+						cs.R1CSCore.System.SymbolTable = cs2.R1CSCore.System.SymbolTable
+						cs.R1CSCore.System.MDebug = cs2.R1CSCore.System.MDebug
+					}
+
+					cs.R1CSCore.System.NbHintFnWires = cs2.R1CSCore.System.NbHintFnWires
+					cs.R1CSCore.System.NbHintFnInputs = cs2.R1CSCore.System.NbHintFnInputs
+					cs.R1CSCore.System.MHints = cs2.R1CSCore.System.MHints
+					cs.R1CSCore.System.MHintsDependencies = cs2.R1CSCore.System.MHintsDependencies
+
+					cs.R1CSCore.System.CommitmentInfo = cs2.R1CSCore.System.CommitmentInfo
+					cs.R1CSCore.System.GKRMeta = cs2.R1CSCore.System.GKRMeta
+
+					wg.Done()
+				} else if i == -2 {
+					cs2 := &R1CS{}
+
+					name := fmt.Sprintf("%s.r1cs.E2.save", session)
+					csFile, err := os.Open(name)
+					if err != nil {
+						panic(err)
+					}
+					_, err = cs2.ReadFrom(csFile)
+					if err != nil {
+						panic(err)
+					}
+					cs.R1CSCore.LazyCons = cs2.R1CSCore.LazyCons
+
+					wg.Done()
+				} else if i == -3 {
+					cs2 := &R1CS{}
+
+					name := fmt.Sprintf("%s.r1cs.E3.save", session)
+					csFile, err := os.Open(name)
+					if err != nil {
+						panic(err)
+					}
+					_, err = cs2.ReadFrom(csFile)
+					if err != nil {
+						panic(err)
+					}
+					cs.R1CSCore.LazyConsMap = cs2.R1CSCore.LazyConsMap
+
+					wg.Done()
+				} else if i == -4 {
+					cs2 := &R1CS{}
+
+					name := fmt.Sprintf("%s.r1cs.E4.save", session)
+					csFile, err := os.Open(name)
+					if err != nil {
+						panic(err)
+					}
+					_, err = cs2.ReadFrom(csFile)
+					if err != nil {
+						panic(err)
+					}
+					cs.CoeffTable = cs2.CoeffTable
+					cs.R1CSCore.StaticConstraints = cs2.R1CSCore.StaticConstraints
+
+					wg.Done()
+				} else { // R1c part
+					cs2 := &R1CS{}
+					iNew := i + batchSize
+					if iNew > N {
+						iNew = N
+					}
+					name := fmt.Sprintf("%s.r1cs.Cons.%d.%d.save", session, i, iNew)
+					csFile, err := os.Open(name)
+					if err != nil {
+						panic(err)
+					}
+					reader := bufio.NewReader(csFile)
+					dec := gob.NewDecoder(reader)
+					err = dec.Decode(cs2)
+					if err != nil {
+						panic(err)
+					}
+					copy(cs.R1CSCore.Constraints[i:iNew], cs2.R1CSCore.Constraints)
+
+					wg.Done()
+				}
+			}
+		}()
+	}
+
+	defer func() {
+		close(chTasks)
+	}()
+
+	eTasks := []int{-1, -11, -12, -13, -14, -15, -2, -3, -4}
+	for _, t := range eTasks {
+		wg.Add(1)
+		chTasks <- t
+	}
+
+	for i := 0; i < N; {
+		// read R1C[i, min(i+batchSize, end)]
+		iNew := i + batchSize
+		if iNew > N {
+			iNew = N
+		}
+		wg.Add(1)
+		chTasks <- i
+
+		i = iNew
+	}
+	wg.Wait()
 }

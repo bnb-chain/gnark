@@ -20,7 +20,10 @@
 package groth16
 
 import (
+	"fmt"
+	"github.com/consensys/gnark-crypto/ecc/bn254/fr/fft"
 	"io"
+	"os"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend"
@@ -438,4 +441,358 @@ func NewCS(curveID ecc.ID) constraint.ConstraintSystem {
 		panic("not implemented")
 	}
 	return r1cs
+}
+
+func ReadSegmentProveKey(curveID ecc.ID, filepath string) (pks []ProvingKey, err error) {
+	switch curveID {
+	case ecc.BN254:
+		pks = make([]ProvingKey, 2)
+		// pkE
+		pks[0] = NewProvingKey(curveID)
+		// pkB2
+		pks[1] = NewProvingKey(curveID)
+
+		f0, _ := os.Open(filepath + ".pk.E.save")
+		_, err = pks[0].(*groth16_bn254.ProvingKey).UnsafeReadEFrom(f0)
+		if err != nil {
+			return pks, fmt.Errorf("read file error")
+		}
+		err = f0.Close()
+		if err != nil {
+			return pks, err
+		}
+
+		if _, err = os.Stat(filepath + ".pk.CommitmentKey.save"); err == nil {
+			commitmentKey, _ := os.Open(filepath + ".pk.CommitmentKey.save")
+			_, err = pks[0].(*groth16_bn254.ProvingKey).UnsafeReadCommitmentKeyFrom(commitmentKey)
+			if err != nil {
+				return pks, fmt.Errorf("read file error")
+			}
+			err = commitmentKey.Close()
+			if err != nil {
+				return pks, err
+			}
+		}
+
+		f1, _ := os.Open(filepath + ".pk.B2.save")
+		_, err = pks[1].(*groth16_bn254.ProvingKey).UnsafeReadB2From(f1)
+		if err != nil {
+			return pks, fmt.Errorf("read file error")
+		}
+		err = f1.Close()
+		if err != nil {
+			return pks, err
+		}
+
+		return pks, nil
+	default:
+		panic("not implemented")
+	}
+}
+
+func ProveRoll(r1cs constraint.ConstraintSystem, pkE, pkB2 ProvingKey, fullWitness witness.Witness, session string, opts ...backend.ProverOption) (Proof, error) {
+
+	// apply options
+	opt, err := backend.NewProverConfig(opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	switch _r1cs := r1cs.(type) {
+	case *cs_bls12377.R1CS:
+		w, ok := fullWitness.Vector().(fr_bls12377.Vector)
+		if !ok {
+			return nil, witness.ErrInvalidWitness
+		}
+		return groth16_bls12377.ProveRoll(_r1cs, pkE.(*groth16_bls12377.ProvingKey), pkB2.(*groth16_bls12377.ProvingKey), w, opt, session)
+	case *cs_bls12381.R1CS:
+		w, ok := fullWitness.Vector().(fr_bls12381.Vector)
+		if !ok {
+			return nil, witness.ErrInvalidWitness
+		}
+		return groth16_bls12381.ProveRoll(_r1cs, pkE.(*groth16_bls12381.ProvingKey), pkB2.(*groth16_bls12381.ProvingKey), w, opt, session)
+	case *cs_bls24315.R1CS:
+		w, ok := fullWitness.Vector().(fr_bls24315.Vector)
+		if !ok {
+			return nil, witness.ErrInvalidWitness
+		}
+		return groth16_bls24315.ProveRoll(_r1cs, pkE.(*groth16_bls24315.ProvingKey), pkB2.(*groth16_bls24315.ProvingKey), w, opt, session)
+	case *cs_bls24317.R1CS:
+		w, ok := fullWitness.Vector().(fr_bls24317.Vector)
+		if !ok {
+			return nil, witness.ErrInvalidWitness
+		}
+		return groth16_bls24317.ProveRoll(_r1cs, pkE.(*groth16_bls24317.ProvingKey), pkB2.(*groth16_bls24317.ProvingKey), w, opt, session)
+	case *cs_bn254.R1CS:
+		w, ok := fullWitness.Vector().(fr_bn254.Vector)
+		if !ok {
+			return nil, witness.ErrInvalidWitness
+		}
+		return groth16_bn254.ProveRoll(_r1cs, pkE.(*groth16_bn254.ProvingKey), pkB2.(*groth16_bn254.ProvingKey), w, opt, session)
+	case *cs_bw6633.R1CS:
+		w, ok := fullWitness.Vector().(fr_bw6633.Vector)
+		if !ok {
+			return nil, witness.ErrInvalidWitness
+		}
+		return groth16_bw6633.ProveRoll(_r1cs, pkE.(*groth16_bw6633.ProvingKey), pkB2.(*groth16_bw6633.ProvingKey), w, opt, session)
+	case *cs_bw6761.R1CS:
+		w, ok := fullWitness.Vector().(fr_bw6761.Vector)
+		if !ok {
+			return nil, witness.ErrInvalidWitness
+		}
+		return groth16_bw6761.ProveRoll(_r1cs, pkE.(*groth16_bw6761.ProvingKey), pkB2.(*groth16_bw6761.ProvingKey), w, opt, session)
+	default:
+		panic("unrecognized R1CS curve type")
+	}
+}
+
+func SplitDumpPK(Pk ProvingKey, session string) error {
+	switch pk := Pk.(type) {
+	case *groth16_bn254.ProvingKey:
+		// E part
+		{
+			pk.Card = pk.Domain.Cardinality
+			name := fmt.Sprintf("%s.pk.E.save", session)
+			pkFile, err := os.Create(name)
+			if err != nil {
+				return err
+			}
+			cnt, err := pk.WriteRawETo(pkFile)
+			if err != nil {
+				return err
+			}
+			fmt.Println("written ", cnt, "bytes for pk.E.save")
+		}
+
+		// A part
+		{
+			pk2 := &groth16_bn254.ProvingKey{}
+			pk2.G1.A = pk.G1.A
+
+			name := fmt.Sprintf("%s.pk.A.save", session)
+			pkFile, err := os.Create(name)
+			if err != nil {
+				return err
+			}
+			cnt, err := pk2.WriteRawATo(pkFile)
+			if err != nil {
+				return err
+			}
+			fmt.Println("written ", cnt, "bytes for pk.A.save")
+
+		}
+
+		// B1 part
+		{
+			pk2 := &groth16_bn254.ProvingKey{}
+			pk2.G1.B = pk.G1.B
+
+			name := fmt.Sprintf("%s.pk.B1.save", session)
+			pkFile, err := os.Create(name)
+			if err != nil {
+				return err
+			}
+			cnt, err := pk2.WriteRawB1To(pkFile)
+			if err != nil {
+				return err
+			}
+			fmt.Println("written ", cnt, "bytes for pk.B1.save")
+
+		}
+
+		// K part
+		{
+			pk2 := &groth16_bn254.ProvingKey{}
+			pk2.G1.K = pk.G1.K
+
+			name := fmt.Sprintf("%s.pk.K.save", session)
+			pkFile, err := os.Create(name)
+			if err != nil {
+				return err
+			}
+			cnt, err := pk2.WriteRawKTo(pkFile)
+			if err != nil {
+				return err
+			}
+			fmt.Println("written ", cnt, "bytes for pk.K.save")
+
+		}
+
+		// Z part
+		{
+			pk2 := &groth16_bn254.ProvingKey{}
+			pk2.G1.Z = pk.G1.Z
+
+			name := fmt.Sprintf("%s.pk.Z.save", session)
+			pkFile, err := os.Create(name)
+			if err != nil {
+				return err
+			}
+			cnt, err := pk2.WriteRawZTo(pkFile)
+			if err != nil {
+				return err
+			}
+			fmt.Println("written ", cnt, "bytes for pk.Z.save")
+
+		}
+
+		// B2 part
+		{
+			pk2 := &groth16_bn254.ProvingKey{}
+			pk2.G2.B = pk.G2.B
+
+			name := fmt.Sprintf("%s.pk.B2.save", session)
+			pkFile, err := os.Create(name)
+			if err != nil {
+				return err
+			}
+			cnt, err := pk2.WriteRawB2To(pkFile)
+			if err != nil {
+				return err
+			}
+			fmt.Println("written ", cnt, "bytes for pk.B2.save")
+
+		}
+	default:
+		panic("unsupported Pk curve type")
+	}
+
+	return nil
+}
+
+func LoadSplitPK(Pk *ProvingKey, session string) ProvingKey {
+	switch pk := (*Pk).(type) {
+	case *groth16_bn254.ProvingKey:
+		// E part
+		{
+			name := fmt.Sprintf("%s.pk.E.save", session)
+			pkFile, err := os.Open(name)
+			if err != nil {
+				return nil
+			}
+			cnt, err := pk.UnsafeReadEFrom(pkFile)
+			if err != nil {
+				return nil
+			}
+			fmt.Println("read ", cnt, "bytes for pk.E.save")
+			pk.Domain = *fft.NewDomain(pk.Card)
+		}
+
+		// A part
+		{
+			name := fmt.Sprintf("%s.pk.A.save", session)
+			pkFile, err := os.Open(name)
+			if err != nil {
+				return nil
+			}
+			cnt, err := pk.UnsafeReadAFrom(pkFile)
+			if err != nil {
+				return nil
+			}
+			fmt.Println("read ", cnt, "bytes for pk.A.save")
+		}
+
+		// B1 part
+		{
+			name := fmt.Sprintf("%s.pk.B1.save", session)
+			pkFile, err := os.Open(name)
+			if err != nil {
+				return nil
+			}
+			cnt, err := pk.UnsafeReadB1From(pkFile)
+			if err != nil {
+				return nil
+			}
+			fmt.Println("read ", cnt, "bytes for pk.B1.save")
+		}
+
+		// K part
+		{
+			name := fmt.Sprintf("%s.pk.K.save", session)
+			pkFile, err := os.Open(name)
+			if err != nil {
+				return nil
+			}
+			cnt, err := pk.UnsafeReadKFrom(pkFile)
+			if err != nil {
+				return nil
+			}
+			fmt.Println("read ", cnt, "bytes for pk.K.save")
+		}
+
+		// Z part
+		{
+			name := fmt.Sprintf("%s.pk.Z.save", session)
+			pkFile, err := os.Open(name)
+			if err != nil {
+				return nil
+			}
+			cnt, err := pk.UnsafeReadZFrom(pkFile)
+			if err != nil {
+				return nil
+			}
+			fmt.Println("read ", cnt, "bytes for pk.Z.save")
+		}
+
+		// B2 part
+		{
+			name := fmt.Sprintf("%s.pk.B2.save", session)
+			pkFile, err := os.Open(name)
+			if err != nil {
+				return nil
+			}
+			cnt, err := pk.UnsafeReadB2From(pkFile)
+			if err != nil {
+				return nil
+			}
+			fmt.Println("open ", cnt, "bytes for pk.B2.save")
+		}
+
+		return pk
+	default:
+		panic("unsupported Pk curve type")
+	}
+}
+
+func SetupDumpKeys(r1cs constraint.ConstraintSystem, session string) error {
+
+	switch _r1cs := r1cs.(type) {
+	case *cs_bls12377.R1CS:
+		if err := groth16_bls12377.SetupDumpKeys(_r1cs, session); err != nil {
+			return err
+		}
+		return nil
+	case *cs_bls12381.R1CS:
+		if err := groth16_bls12381.SetupDumpKeys(_r1cs, session); err != nil {
+			return err
+		}
+		return nil
+	case *cs_bn254.R1CS:
+		if err := groth16_bn254.SetupDumpKeys(_r1cs, session); err != nil {
+			return err
+		}
+		return nil
+	case *cs_bw6761.R1CS:
+		if err := groth16_bw6761.SetupDumpKeys(_r1cs, session); err != nil {
+			return err
+		}
+		return nil
+	case *cs_bls24317.R1CS:
+		if err := groth16_bls24317.SetupDumpKeys(_r1cs, session); err != nil {
+			return err
+		}
+		return nil
+	case *cs_bls24315.R1CS:
+		if err := groth16_bls24315.SetupDumpKeys(_r1cs, session); err != nil {
+			return err
+		}
+		return nil
+	case *cs_bw6633.R1CS:
+		if err := groth16_bw6633.SetupDumpKeys(_r1cs, session); err != nil {
+			return err
+		}
+		return nil
+	default:
+		panic("unrecognized R1CS curve type")
+	}
 }

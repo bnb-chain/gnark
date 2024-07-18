@@ -52,7 +52,6 @@ type builder struct {
 	cs constraint.R1CS
 
 	config frontend.CompileConfig
-
 	// map for recording boolean constrained variables (to not constrain them twice)
 	mtBooleans map[uint64][]expr.LinearExpression
 
@@ -270,6 +269,8 @@ func (builder *builder) Compile() (constraint.ConstraintSystem, error) {
 		}
 	}
 
+	builder.cs.FinalizeGKR()
+
 	return builder.cs, nil
 }
 
@@ -447,4 +448,69 @@ func (builder *builder) compress(le expr.LinearExpression) expr.LinearExpression
 	t := builder.newInternalVariable()
 	builder.cs.AddConstraint(builder.newR1C(le, one, t))
 	return t
+}
+
+func (builder *builder) StartRecordConstraintsForLazy(key string, s *[]frontend.Variable) {
+	log := logger.Logger()
+	if _, exists := constraint.LazyInputsFactoryMap[key]; !exists {
+		// not register, continue
+		panic("the lazy factory function is not registered")
+	}
+	expressions, _ := builder.toVariables(*s...)
+	// we are not using constant value because this will change repeatable called function generated constraints structure
+	for i := range expressions {
+		if _, constant := builder.constantValue(expressions[i]); constant {
+			one := builder.cstOne()
+			t := builder.newInternalVariable()
+			builder.cs.AddConstraint(builder.newR1C(expressions[i], one, t))
+			expressions[i] = t
+			(*s)[i] = expressions[i]
+			log.Warn().Msg("detect constant variables in lazy, will be converted to internal variables")
+		}
+	}
+
+	constraintExpressions := make([]constraint.LinearExpression, len(expressions))
+	for i := range constraintExpressions {
+		constraintExpressions[i] = builder.getLinearExpression(expressions[i])
+	}
+	builder.cs.StartAddStaticConstraints(key, builder.cs.GetNbConstraints(), constraintExpressions)
+}
+
+func (builder *builder) EndRecordConstraintsForLazy(key string, s *[]frontend.Variable) {
+	if _, exists := constraint.LazyInputsFactoryMap[key]; !exists {
+		// not register, continue
+		panic("the lazy factory function is not registered")
+	}
+	expressions, _ := builder.toVariables(*s...)
+	constraintExpressions := make([]constraint.LinearExpression, len(expressions))
+	for i := range constraintExpressions {
+		constraintExpressions[i] = builder.getLinearExpression(expressions[i])
+	}
+	builder.cs.EndAddStaticConstraints(key, builder.cs.GetNbConstraints(), constraintExpressions)
+}
+
+func (builder *builder) AddGKRInputsAndOutputsMarks(inputs []frontend.Variable, outputs []frontend.Variable, initialHash frontend.Variable) {
+	meta := constraint.GkrMeta{}
+
+	// constraint linear expression to get the normal value in the solving
+	vi := builder.cs.AddInternalVariable()
+	O := constraint.LinearExpression{builder.cs.MakeTerm(&builder.tOne, vi)}
+	builder.cs.AddConstraint(constraint.R1C{L: builder.getLinearExpression(builder.toVariable(initialHash)), R: builder.getLinearExpression(builder.cstOne()), O: O})
+	meta.GKRInitialHashVID = O[0].VID
+
+	meta.GKRConstraintsPos = builder.cs.GetNbConstraints()
+	GKRInputTables, _ := builder.toVariables(inputs...)
+	GKROutputTables, _ := builder.toVariables(outputs...)
+	constraintExpressionsInputs := make([]constraint.LinearExpression, len(GKRInputTables))
+	for i := range GKRInputTables {
+		constraintExpressionsInputs[i] = builder.getLinearExpression(GKRInputTables[i])
+	}
+	constraintExpressionsOutputs := make([]constraint.LinearExpression, len(GKROutputTables))
+	for i := range GKROutputTables {
+		constraintExpressionsOutputs[i] = builder.getLinearExpression(GKROutputTables[i])
+	}
+	meta.GKRInputTables = constraintExpressionsInputs
+	meta.GKROutputTables = constraintExpressionsOutputs
+	meta.GKRBN = builder.config.GKRBN
+	builder.cs.SetGKRMeta(meta)
 }

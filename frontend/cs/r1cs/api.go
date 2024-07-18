@@ -563,9 +563,12 @@ func (builder *builder) IsZero(i1 frontend.Variable) frontend.Variable {
 // Cmp returns 1 if i1>i2, 0 if i1=i2, -1 if i1<i2
 func (builder *builder) Cmp(i1, i2 frontend.Variable) frontend.Variable {
 
-	vars, _ := builder.toVariables(i1, i2)
-	bi1 := builder.ToBinary(vars[0], builder.cs.FieldBitLen())
-	bi2 := builder.ToBinary(vars[1], builder.cs.FieldBitLen())
+	nbBits := builder.cs.FieldBitLen()
+	// in AssertIsLessOrEq we omitted comparison against modulus for the left
+	// side as if `a+r<b` implies `a<b`, then here we compute the inequality
+	// directly.
+	bi1 := bits.ToBinary(builder, i1, bits.WithNbDigits(nbBits))
+	bi2 := bits.ToBinary(builder, i2, bits.WithNbDigits(nbBits))
 
 	res := builder.cstZero()
 
@@ -584,6 +587,33 @@ func (builder *builder) Cmp(i1, i2 frontend.Variable) frontend.Variable {
 
 	}
 	return res
+}
+
+func (builder *builder) CmpNOp(i1, i2 frontend.Variable, maxBits int, omitRangeCheck ...bool) frontend.Variable {
+	
+	nbBits := builder.cs.FieldBitLen()
+	if maxBits > nbBits {
+		panic("CmpNOp: maxBits > nbBits")
+	}
+	omitRangeCheckFlag := false
+	if len(omitRangeCheck) > 0 {
+		omitRangeCheckFlag = omitRangeCheck[0]
+	}
+	if !omitRangeCheckFlag {
+		bits.ToBinary(builder, i1, bits.WithNbDigits(maxBits))
+		bits.ToBinary(builder, i2, bits.WithNbDigits(maxBits))
+	}
+
+	c := new(big.Int).Exp(big.NewInt(2), big.NewInt(int64(maxBits)), nil)
+	isEqual := builder.IsZero(builder.Sub(i1, i2))
+	// res = i1 + 2^maxBits - i2
+	// if i1 < i2, res <= 2^maxBits - 1, then the max bit of res is 0
+	// if i1 > i2, 2^maxBits < res < 2^(maxBits + 1), then the max bit of res is 1
+	res := builder.Add(i1, c)
+	res = builder.Sub(res, i2)
+	resBits := bits.ToBinary(builder, res, bits.WithNbDigits(maxBits+1))
+	ret := builder.Select(isEqual, 0, builder.Select(resBits[maxBits], 1, -1))
+	return ret
 }
 
 // Println enables circuit debugging and behaves almost like fmt.Println()

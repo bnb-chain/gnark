@@ -370,6 +370,15 @@ func (e *engine) Cmp(i1, i2 frontend.Variable) frontend.Variable {
 	return res
 }
 
+// Cmp returns 1 if i1>i2, 0 if i1==i2, -1 if i1<i2
+func (e *engine) CmpNOp(i1, i2 frontend.Variable, maxBits int, omitRangeCheck ...bool) frontend.Variable {
+	b1 := e.toBigInt(i1)
+	b2 := e.toBigInt(i2)
+	res := big.NewInt(int64(b1.Cmp(b2)))
+	res.Mod(res, e.modulus())
+	return res
+}
+
 func (e *engine) AssertIsEqual(i1, i2 frontend.Variable) {
 	cptAssertIsEqual++
 	b1, b2 := e.toBigInt(i1), e.toBigInt(i2)
@@ -391,6 +400,20 @@ func (e *engine) AssertIsBoolean(i1 frontend.Variable) {
 }
 
 func (e *engine) AssertIsLessOrEqual(v frontend.Variable, bound frontend.Variable) {
+
+	bValue := e.toBigInt(bound)
+
+	if bValue.Sign() == -1 {
+		panic(fmt.Sprintf("[assertIsLessOrEqual] bound (%s) must be positive", bValue.String()))
+	}
+
+	b1 := e.toBigInt(v)
+	if b1.Cmp(bValue) == 1 {
+		panic(fmt.Sprintf("[assertIsLessOrEqual] %s > %s", b1.String(), bValue.String()))
+	}
+}
+
+func (e *engine) AssertIsLessOrEqualNOp(v frontend.Variable, bound frontend.Variable, maxBits int, omitRangeCheck ...bool) {
 
 	bValue := e.toBigInt(bound)
 
@@ -488,6 +511,17 @@ func (e *engine) IsConstant(v frontend.Variable) bool {
 func (e *engine) ConstantValue(v frontend.Variable) (*big.Int, bool) {
 	r := e.toBigInt(v)
 	return r, e.constVars
+}
+
+func (e *engine) StartRecordConstraintsForLazy(key string, s *[]frontend.Variable) {
+	// lazy evaluation is not implemented for the test engine
+}
+
+func (e *engine) EndRecordConstraintsForLazy(key string, s *[]frontend.Variable) {
+	// lazy evaluation is not implemented for the test engine
+}
+
+func (e *engine) AddGKRInputsAndOutputsMarks(inputs []frontend.Variable, outputs []frontend.Variable, initialHash frontend.Variable) {
 }
 
 func (e *engine) IsBoolean(v frontend.Variable) bool {

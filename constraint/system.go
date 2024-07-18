@@ -1,6 +1,9 @@
 package constraint
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
@@ -63,9 +66,18 @@ type ConstraintSystem interface {
 	// debug information only once.
 	AttachDebugInfo(debugInfo DebugInfo, constraintID []int)
 
-	// CheckUnconstrainedWires returns and error if the constraint system has wires that are not uniquely constrained.
+	// CheckUnconstrainedWires returns an error if the constraint system has wires that are not uniquely constrained.
 	// This is experimental.
 	CheckUnconstrainedWires() error
+
+	// Lazify updates the constraint system by removing all the constraints captured by the lazy evaluation
+	// and storing a compressed form separately. It returns the remapping from the old constraint indices to the new ones.
+	// will return nil if no changes made to update levels
+	Lazify() map[int]int
+	GetNbR1C() int
+
+	LoadFromSplitBinaryConcurrent(session string, constraints int, size int, cpu int)
+	SplitDumpBinary(session string, batchSize int) error
 }
 
 type Iterable interface {
@@ -105,6 +117,12 @@ type System struct {
 	// several constraints may point to the same debug info
 	MDebug map[int]int
 
+	HintFnInputsToIdx  map[string]int
+	IndexedInputs      [][]LinearExpression
+	HintFnWiresToIdx   map[string]int
+	IndexedWires       [][]int
+	NbHintFnWires      int
+	NbHintFnInputs     int
 	MHints             map[int]*Hint      // maps wireID to hint
 	MHintsDependencies map[hint.ID]string // maps hintID to hint string identifier
 
@@ -121,11 +139,13 @@ type System struct {
 	bitLen int      `cbor:"-"`
 
 	// level builder
-	lbWireLevel []int              `cbor:"-"` // at which level we solve a wire. init at -1.
-	lbOutputs   []uint32           `cbor:"-"` // wire outputs for current constraint.
-	lbHints     map[*Hint]struct{} `cbor:"-"` // hints we processed in current round
+	lbWireLevel    []int              `cbor:"-"` // at which level we solve a wire. init at -1.
+	lbOutputs      []uint32           `cbor:"-"` // wire outputs for current constraint.
+	lbHints        map[*Hint]struct{} `cbor:"-"` // hints we processed in current round
+	gkrTransferMap map[int]int        `cbor:"-"` // gkr transfer map
 
 	CommitmentInfo Commitment
+	GKRMeta        GkrMeta
 }
 
 // NewSystem initialize the common structure among constraint system
@@ -140,6 +160,12 @@ func NewSystem(scalarField *big.Int) System {
 		q:                  new(big.Int).Set(scalarField),
 		bitLen:             scalarField.BitLen(),
 		lbHints:            map[*Hint]struct{}{},
+		gkrTransferMap:     make(map[int]int),
+		HintFnInputsToIdx:  make(map[string]int),
+		HintFnWiresToIdx:   make(map[string]int),
+		IndexedWires:       make([][]int, 0),
+		NbHintFnWires:      0,
+		NbHintFnInputs:     0,
 	}
 }
 
@@ -218,6 +244,48 @@ func (system *System) AddSecretVariable(name string) (idx int) {
 	return idx
 }
 
+func (system *System) GetIdxFromWires(wires []int) int {
+	key, err := json.Marshal(wires)
+	if err != nil {
+		panic(err)
+	}
+	h := sha256.New224()
+	h.Write(key)
+	cKey := hex.EncodeToString(h.Sum(nil))
+	if idx, exist := system.HintFnWiresToIdx[cKey]; exist {
+		return idx
+	} else {
+		system.IndexedWires = append(system.IndexedWires, wires)
+		cnt := system.NbHintFnWires
+		system.HintFnWiresToIdx[cKey] = cnt
+		system.NbHintFnWires = cnt + 1
+		return cnt
+	}
+}
+
+func (system *System) GetWiresFromIdx(idx int) []int {
+	return system.IndexedWires[idx]
+}
+
+func (system *System) GetIdxFromInputs(inputs []LinearExpression) int {
+	key, err := json.Marshal(inputs)
+	if err != nil {
+		panic(err)
+	}
+	h := sha256.New224()
+	h.Write(key)
+	cKey := hex.EncodeToString(h.Sum(nil))
+	if idx, exist := system.HintFnInputsToIdx[cKey]; exist {
+		return idx
+	} else {
+		system.IndexedInputs = append(system.IndexedInputs, inputs)
+		cnt := system.NbHintFnInputs
+		system.HintFnInputsToIdx[cKey] = cnt
+		system.NbHintFnInputs = cnt + 1
+		return cnt
+	}
+}
+
 func (system *System) AddSolverHint(f hint.Function, input []LinearExpression, nbOutput int) (internalVariables []int, err error) {
 	if nbOutput <= 0 {
 		return nil, fmt.Errorf("hint function must return at least one output")
@@ -241,9 +309,17 @@ func (system *System) AddSolverHint(f hint.Function, input []LinearExpression, n
 	}
 
 	// associate these wires with the solver hint
-	ch := &Hint{ID: hintUUID, Inputs: input, Wires: internalVariables}
+	wiresIdx := system.GetIdxFromWires(internalVariables)
+	inputIdx := system.GetIdxFromInputs(input)
+	ch := &Hint{ID: hintUUID, InputsIdx: inputIdx, WiresIdx: wiresIdx}
 	for _, vID := range internalVariables {
 		system.MHints[vID] = ch
+	}
+	for _, vID := range internalVariables {
+		system.MHints[vID] = ch
+		if hint.Name(f) == hint.Name(hint.MIMC2Elements) {
+			system.GKRMeta.MIMCHints = append(system.GKRMeta.MIMCHints, vID)
+		}
 	}
 
 	return
