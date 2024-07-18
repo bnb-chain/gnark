@@ -589,14 +589,20 @@ func (builder *builder) Cmp(i1, i2 frontend.Variable) frontend.Variable {
 	return res
 }
 
-func (builder *builder) CmpNOp(i1, i2 frontend.Variable, maxBits int) frontend.Variable {
+func (builder *builder) CmpNOp(i1, i2 frontend.Variable, maxBits int, omitRangeCheck ...bool) frontend.Variable {
 	
 	nbBits := builder.cs.FieldBitLen()
 	if maxBits > nbBits {
 		panic("CmpNOp: maxBits > nbBits")
 	}
-	bits.ToBinary(builder, i1, bits.WithNbDigits(maxBits))
-	bits.ToBinary(builder, i2, bits.WithNbDigits(maxBits))
+	omitRangeCheckFlag := false
+	if len(omitRangeCheck) > 0 {
+		omitRangeCheckFlag = omitRangeCheck[0]
+	}
+	if !omitRangeCheckFlag {
+		bits.ToBinary(builder, i1, bits.WithNbDigits(maxBits))
+		bits.ToBinary(builder, i2, bits.WithNbDigits(maxBits))
+	}
 
 	c := new(big.Int).Exp(big.NewInt(2), big.NewInt(int64(maxBits)), nil)
 	isEqual := builder.IsZero(builder.Sub(i1, i2))

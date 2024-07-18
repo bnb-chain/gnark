@@ -224,7 +224,7 @@ func (builder *builder) MustBeLessOrEqCst(aBits []frontend.Variable, bound *big.
 	}
 }
 
-func (builder *builder) AssertIsLessOrEqualNOp(_v frontend.Variable, bound frontend.Variable, maxBits int) {
+func (builder *builder) AssertIsLessOrEqualNOp(_v frontend.Variable, bound frontend.Variable, maxBits int, omitRangeCheck ...bool) {
 	cv, vConst := builder.constantValue(_v)
 	cb, bConst := builder.constantValue(bound)
 
@@ -235,20 +235,26 @@ func (builder *builder) AssertIsLessOrEqualNOp(_v frontend.Variable, bound front
 			panic(fmt.Sprintf("AssertIsLessOrEqual: %s > %s", bv.String(), bb.String()))
 		}
 	}
+	omitRangeCheckFlag := false
+	if len(omitRangeCheck) > 0 {
+		omitRangeCheckFlag = omitRangeCheck[0]
+	}
 
 	// bound is constant
 	if bConst {
-		builder.MustBeLessOrEqCstNOp(_v, builder.cs.ToBigInt(&cb), _v, maxBits)
+		builder.MustBeLessOrEqCstNOp(_v, builder.cs.ToBigInt(&cb), _v, maxBits, omitRangeCheckFlag)
 		return
 	}
-	builder.mustBeLessOrEqVarNOp(_v, bound, maxBits)
+	builder.mustBeLessOrEqVarNOp(_v, bound, maxBits, omitRangeCheckFlag)
 }
 
-func (builder *builder) mustBeLessOrEqVarNOp(v, bound frontend.Variable, maxBits int) {
+func (builder *builder) mustBeLessOrEqVarNOp(v, bound frontend.Variable, maxBits int, omitRangeCheck bool) {
 	c := new(big.Int).Exp(big.NewInt(2), big.NewInt(int64(maxBits)), nil)
-	// make sure v and bound are less than 2^maxBits
-	bits.ToBinary(builder, v, bits.WithNbDigits(maxBits))
-	bits.ToBinary(builder, bound, bits.WithNbDigits(maxBits))
+	if !omitRangeCheck {
+		// make sure v and bound are less than 2^maxBits
+		bits.ToBinary(builder, v, bits.WithNbDigits(maxBits))
+		bits.ToBinary(builder, bound, bits.WithNbDigits(maxBits))
+	}
 	
 	// res := v + 2^maxBits - (bound + 1)
 	// if v <= bound, res <= 2^maxBits - 1, then the max bit of res is 0
@@ -260,7 +266,7 @@ func (builder *builder) mustBeLessOrEqVarNOp(v, bound frontend.Variable, maxBits
 	builder.AssertIsEqual(resBits[maxBits], 0)
 }
 
-func (builder *builder) MustBeLessOrEqCstNOp(a frontend.Variable, bound *big.Int, aForDebug frontend.Variable, maxBits int) {
+func (builder *builder) MustBeLessOrEqCstNOp(a frontend.Variable, bound *big.Int, aForDebug frontend.Variable, maxBits int, omitRangeCheck bool) {
 	nbBits := builder.cs.FieldBitLen()
 	if maxBits > nbBits {
 		panic("maxBits is larger than field bit length")
