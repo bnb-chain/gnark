@@ -371,7 +371,7 @@ func (e *engine) Cmp(i1, i2 frontend.Variable) frontend.Variable {
 }
 
 // Cmp returns 1 if i1>i2, 0 if i1==i2, -1 if i1<i2
-func (e *engine) CmpNOp(i1, i2 frontend.Variable, maxBits int) frontend.Variable {
+func (e *engine) CmpNOp(i1, i2 frontend.Variable, maxBits int, omitRangeCheck ...bool) frontend.Variable {
 	b1 := e.toBigInt(i1)
 	b2 := e.toBigInt(i2)
 	res := big.NewInt(int64(b1.Cmp(b2)))
@@ -413,7 +413,7 @@ func (e *engine) AssertIsLessOrEqual(v frontend.Variable, bound frontend.Variabl
 	}
 }
 
-func (e *engine) AssertIsLessOrEqualNOp(v frontend.Variable, bound frontend.Variable, maxBits int) {
+func (e *engine) AssertIsLessOrEqualNOp(v frontend.Variable, bound frontend.Variable, maxBits int, omitRangeCheck ...bool) {
 
 	bValue := e.toBigInt(bound)
 
