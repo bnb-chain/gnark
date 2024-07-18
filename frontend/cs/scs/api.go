@@ -502,3 +502,7 @@ func (builder *scs) printArg(log *constraint.LogEntry, sbb *strings.Builder, a f
 func (builder *scs) Compiler() frontend.Compiler {
 	return builder
 }
+
+func (builder *scs) CmpNOp(i1, i2 frontend.Variable, maxBits int) frontend.Variable {
+	panic("not implemented")
+}
